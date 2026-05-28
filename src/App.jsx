@@ -1,15 +1,17 @@
 import React, { useMemo, useState } from 'react';
 
 const STORAGE_KEY = 'brrr-saved-deals';
+const CONSERVATIVE_VOID_RATE = 0.075;
+const CONSERVATIVE_MAINTENANCE_RATE = 0.05;
 
 const initialInputs = {
-  purchasePrice: 180000,
-  refurbCost: 25000,
-  monthlyRent: 1250,
-  interestRate: 5.75,
-  loanToValue: 75,
-  refinanceValue: 250000,
-  legalFees: 2500,
+  purchasePrice: '180000',
+  refurbCost: '25000',
+  monthlyRent: '1250',
+  interestRate: '5.75',
+  loanToValue: '75',
+  refinanceValue: '250000',
+  legalFees: '2500',
 };
 
 const fields = [
@@ -64,6 +66,21 @@ const fields = [
   },
 ];
 
+function toNumber(value) {
+  if (value === '' || value === null || value === undefined) {
+    return 0;
+  }
+
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function normalizeInputs(inputs) {
+  return Object.fromEntries(
+    Object.entries(initialInputs).map(([key]) => [key, inputs?.[key] === undefined ? '' : String(inputs[key])]),
+  );
+}
+
 function formatMoney(value) {
   return new Intl.NumberFormat('en-GB', {
     style: 'currency',
@@ -77,7 +94,7 @@ function formatPercent(value) {
 }
 
 function formatCompactPrice(value) {
-  const safeValue = Number.isFinite(value) ? value : 0;
+  const safeValue = toNumber(value);
   return `£${Math.round(safeValue / 1000)}k`;
 }
 
@@ -123,7 +140,7 @@ function calculateStampDuty(price) {
 }
 
 function getViabilityScore(metrics) {
-  // Simple v1 score: cashflow, yield, cash recycled, and ROI each contribute.
+  // Simple v1 score: cashflow, yield, cash recycled, and cash-on-cash ROI each contribute.
   let score = 0;
 
   if (metrics.monthlyCashflow > 0) score += 25;
@@ -133,8 +150,8 @@ function getViabilityScore(metrics) {
   if (metrics.cashLeftInDeal <= metrics.totalCashInvested * 0.25) score += 25;
   else if (metrics.cashLeftInDeal <= metrics.totalCashInvested * 0.5) score += 15;
 
-  if (metrics.roi >= 20) score += 25;
-  else if (metrics.roi >= 10) score += 15;
+  if (metrics.cashOnCashRoi >= 20) score += 25;
+  else if (metrics.cashOnCashRoi >= 10) score += 15;
 
   return Math.min(score, 100);
 }
@@ -174,6 +191,7 @@ function loadSavedDeals() {
 
 function App() {
   const [inputs, setInputs] = useState(initialInputs);
+  const [analysisMode, setAnalysisMode] = useState('conservative');
   const [savedDeals, setSavedDeals] = useState(loadSavedDeals);
   const [activeDealId, setActiveDealId] = useState(null);
   const [saveMessage, setSaveMessage] = useState('');
@@ -181,7 +199,7 @@ function App() {
   function updateInput(name, value) {
     setInputs((currentInputs) => ({
       ...currentInputs,
-      [name]: Number(value),
+      [name]: value,
     }));
 
     // Once a user edits a loaded deal, it becomes a new unsaved scenario.
@@ -190,31 +208,53 @@ function App() {
   }
 
   const metrics = useMemo(() => {
-    const stampDuty = calculateStampDuty(inputs.purchasePrice);
+    const purchasePrice = toNumber(inputs.purchasePrice);
+    const refurbCost = toNumber(inputs.refurbCost);
+    const monthlyRent = toNumber(inputs.monthlyRent);
+    const interestRate = toNumber(inputs.interestRate);
+    const loanToValue = toNumber(inputs.loanToValue);
+    const refinanceValue = toNumber(inputs.refinanceValue);
+    const legalFees = toNumber(inputs.legalFees);
+    const isConservative = analysisMode === 'conservative';
+
+    const voidLoss = isConservative ? monthlyRent * CONSERVATIVE_VOID_RATE : 0;
+    const maintenanceAllowance = isConservative ? monthlyRent * CONSERVATIVE_MAINTENANCE_RATE : 0;
+    const effectiveMonthlyRent = Math.max(monthlyRent - voidLoss, 0);
+    const operatingMonthlyIncome = Math.max(effectiveMonthlyRent - maintenanceAllowance, 0);
+    const stampDuty = calculateStampDuty(purchasePrice);
 
     // Total money needed before refinance.
-    const totalCashInvested =
-      inputs.purchasePrice + inputs.refurbCost + stampDuty + inputs.legalFees;
+    const totalCashInvested = purchasePrice + refurbCost + stampDuty + legalFees;
 
     // BRRR refinance lending is usually based on the new value after works.
-    const refinanceLoan = inputs.refinanceValue * (inputs.loanToValue / 100);
+    const refinanceLoan = refinanceValue * (loanToValue / 100);
 
     // This v1 assumes an interest-only mortgage for rental deal screening.
-    const monthlyMortgage = (refinanceLoan * (inputs.interestRate / 100)) / 12;
-    const monthlyCashflow = inputs.monthlyRent - monthlyMortgage;
+    const monthlyMortgage = (refinanceLoan * (interestRate / 100)) / 12;
+    const monthlyCashflow = operatingMonthlyIncome - monthlyMortgage;
     const annualCashflow = monthlyCashflow * 12;
 
     const grossYield =
-      inputs.purchasePrice > 0 ? ((inputs.monthlyRent * 12) / inputs.purchasePrice) * 100 : 0;
+      purchasePrice > 0 ? ((effectiveMonthlyRent * 12) / purchasePrice) * 100 : 0;
 
     const netYield =
       totalCashInvested > 0 ? (annualCashflow / totalCashInvested) * 100 : 0;
 
     // If the refinance covers all invested cash, cash left is shown as zero.
     const cashLeftInDeal = Math.max(totalCashInvested - refinanceLoan, 0);
-    const roi = cashLeftInDeal > 0 ? (annualCashflow / cashLeftInDeal) * 100 : 0;
+
+    // Cash-on-cash ROI measures investor return against total cash used.
+    // It deliberately avoids using cash left after refinance, which can be
+    // close to zero and create distorted 400%+ ROI outputs.
+    const cashOnCashRoi =
+      totalCashInvested > 0 ? (annualCashflow / totalCashInvested) * 100 : 0;
 
     const calculatedMetrics = {
+      analysisMode,
+      voidLoss,
+      maintenanceAllowance,
+      effectiveMonthlyRent,
+      operatingMonthlyIncome,
       stampDuty,
       totalCashInvested,
       refinanceLoan,
@@ -224,14 +264,14 @@ function App() {
       grossYield,
       netYield,
       cashLeftInDeal,
-      roi,
+      cashOnCashRoi,
     };
 
     return {
       ...calculatedMetrics,
       viabilityScore: getViabilityScore(calculatedMetrics),
     };
-  }, [inputs]);
+  }, [inputs, analysisMode]);
 
   function saveDeals(nextDeals) {
     setSavedDeals(nextDeals);
@@ -243,6 +283,7 @@ function App() {
       id: crypto.randomUUID(),
       name: createDealName(inputs),
       createdAt: new Date().toISOString(),
+      analysisMode,
       inputs: { ...inputs },
       metrics: { ...metrics },
     };
@@ -253,7 +294,8 @@ function App() {
   }
 
   function loadDeal(deal) {
-    setInputs(deal.inputs);
+    setInputs(normalizeInputs(deal.inputs));
+    setAnalysisMode(deal.analysisMode || deal.metrics?.analysisMode || 'conservative');
     setActiveDealId(deal.id);
     setSaveMessage(`${deal.name} loaded`);
   }
@@ -269,6 +311,7 @@ function App() {
   }
 
   const dealQuality = getDealQuality(metrics.viabilityScore);
+  const isConservative = analysisMode === 'conservative';
 
   const groupedFields = fields.reduce((groups, field) => {
     groups[field.group] = groups[field.group] || [];
@@ -300,13 +343,17 @@ function App() {
         <div className="summary-card primary">
           <span>Monthly cashflow</span>
           <strong>{formatMoney(metrics.monthlyCashflow)}</strong>
-          <p>After estimated interest-only finance</p>
+          <p>
+            {isConservative
+              ? 'Includes voids and maintenance allowance'
+              : 'Assumes full occupancy and no maintenance deductions'}
+          </p>
         </div>
 
         <div className="summary-card primary">
-          <span>Estimated ROI</span>
-          <strong>{formatPercent(metrics.roi)}</strong>
-          <p>Based on cash left after refinance</p>
+          <span>Cash-on-cash ROI</span>
+          <strong>{formatPercent(metrics.cashOnCashRoi)}</strong>
+          <p>Investor return on total cash used</p>
         </div>
 
         <div className={`summary-card score ${dealQuality.tone}`}>
@@ -362,6 +409,25 @@ function App() {
             <p>{dealQuality.label}</p>
           </div>
 
+          <div className="view-toggle" aria-label="Analysis view">
+            <button
+              className={isConservative ? 'toggle-option active' : 'toggle-option'}
+              type="button"
+              onClick={() => setAnalysisMode('conservative')}
+            >
+              <span>Conservative View</span>
+              <small>Conservative (realistic investor view)</small>
+            </button>
+            <button
+              className={!isConservative ? 'toggle-option active' : 'toggle-option'}
+              type="button"
+              onClick={() => setAnalysisMode('optimistic')}
+            >
+              <span>Optimistic View</span>
+              <small>Optimistic (best-case scenario)</small>
+            </button>
+          </div>
+
           <div className={`score-card ${dealQuality.tone}`}>
             <div>
               <span>BRRR viability score</span>
@@ -378,10 +444,26 @@ function App() {
 
           <div className="metric-list">
             <Result label="Monthly cashflow" value={formatMoney(metrics.monthlyCashflow)} highlight />
-            <Result label="Estimated ROI" value={formatPercent(metrics.roi)} highlight />
+            <Result
+              label="Cash-on-cash ROI"
+              value={formatPercent(metrics.cashOnCashRoi)}
+              note="Investor return on total cash used"
+              highlight
+            />
             <Result label="Annual cashflow" value={formatMoney(metrics.annualCashflow)} />
-            <Result label="Gross yield" value={formatPercent(metrics.grossYield)} />
-            <Result label="Net yield" value={formatPercent(metrics.netYield)} />
+            <Result
+              label="Gross yield"
+              value={formatPercent(metrics.grossYield)}
+              note="Property performance before costs"
+            />
+            <Result
+              label="Net yield"
+              value={formatPercent(metrics.netYield)}
+              note="Property performance after finance"
+            />
+            <Result label="Effective monthly rent" value={formatMoney(metrics.effectiveMonthlyRent)} />
+            <Result label="Void allowance" value={formatMoney(metrics.voidLoss)} />
+            <Result label="Maintenance allowance" value={formatMoney(metrics.maintenanceAllowance)} />
             <Result label="Total cash invested" value={formatMoney(metrics.totalCashInvested)} />
             <Result label="Stamp duty estimate" value={formatMoney(metrics.stampDuty)} />
             <Result label="Refinance loan" value={formatMoney(metrics.refinanceLoan)} />
@@ -416,7 +498,12 @@ function App() {
                     <div className="saved-main">
                       <div>
                         <h3>{deal.name}</h3>
-                        <p>{formatMoney(deal.inputs.purchasePrice)} purchase price</p>
+                        <p>
+                          {formatMoney(toNumber(deal.inputs.purchasePrice))} purchase price ·{' '}
+                          {(deal.analysisMode || deal.metrics.analysisMode || 'conservative') === 'conservative'
+                            ? 'Conservative'
+                            : 'Optimistic'}
+                        </p>
                       </div>
 
                       <div className={`saved-score ${savedQuality.tone}`}>
@@ -430,8 +517,8 @@ function App() {
                         {formatMoney(deal.metrics.monthlyCashflow)}
                       </span>
                       <span>
-                        <small>ROI</small>
-                        {formatPercent(deal.metrics.roi)}
+                        <small>Cash-on-cash ROI</small>
+                        {formatPercent(deal.metrics.cashOnCashRoi ?? deal.metrics.roi)}
                       </span>
                     </div>
 
@@ -462,10 +549,13 @@ function App() {
   );
 }
 
-function Result({ label, value, highlight = false }) {
+function Result({ label, value, note, highlight = false }) {
   return (
     <div className={highlight ? 'metric highlight' : 'metric'}>
-      <span>{label}</span>
+      <span>
+        {label}
+        {note && <em>{note}</em>}
+      </span>
       <strong>{value}</strong>
     </div>
   );

@@ -205,6 +205,17 @@ h1 {
   text-transform: uppercase;
 }
 
+.metric span em {
+  display: block;
+  margin-top: 4px;
+  color: #8f887f;
+  font-size: 0.72rem;
+  font-style: normal;
+  font-weight: 750;
+  line-height: 1.35;
+  text-transform: none;
+}
+
 .summary-card strong {
   display: block;
   margin-top: 9px;
