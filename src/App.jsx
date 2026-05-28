@@ -17,49 +17,49 @@ const fields = [
     name: 'purchasePrice',
     label: 'Purchase price',
     prefix: '£',
-    helper: 'Price you expect to pay for the property.',
+    helper: 'Acquisition price before refurbishment and fees.',
     group: 'Purchase',
   },
   {
     name: 'refurbCost',
     label: 'Refurbishment cost',
     prefix: '£',
-    helper: 'Works needed before refinance or letting.',
+    helper: 'Estimated capital works required before refinance.',
     group: 'Purchase',
   },
   {
     name: 'legalFees',
     label: 'Legal fees and buying costs',
     prefix: '£',
-    helper: 'Solicitor, broker, valuation, and other fees.',
+    helper: 'Solicitor, broker, valuation, and purchase fees.',
     group: 'Purchase',
   },
   {
     name: 'monthlyRent',
     label: 'Monthly rent',
     prefix: '£',
-    helper: 'Expected gross rental income.',
+    helper: 'Expected gross rental income after completion.',
     group: 'Income',
   },
   {
     name: 'interestRate',
     label: 'Interest rate',
     suffix: '%',
-    helper: 'Interest-only mortgage rate.',
+    helper: 'Interest-only finance rate used for screening.',
     group: 'Finance',
   },
   {
     name: 'loanToValue',
     label: 'Loan-to-value',
     suffix: '%',
-    helper: 'Percentage lender may lend on refinance value.',
+    helper: 'Expected refinance lending against the new value.',
     group: 'Finance',
   },
   {
     name: 'refinanceValue',
     label: 'Refinance value',
     prefix: '£',
-    helper: 'Expected value after refurb.',
+    helper: 'Estimated value after refurbishment is complete.',
     group: 'Exit',
   },
 ];
@@ -137,6 +137,30 @@ function getViabilityScore(metrics) {
   else if (metrics.roi >= 10) score += 15;
 
   return Math.min(score, 100);
+}
+
+function getDealQuality(score) {
+  if (score >= 75) {
+    return {
+      tone: 'strong',
+      label: 'Strong Deal',
+      feedback: 'Strong investment opportunity',
+    };
+  }
+
+  if (score >= 45) {
+    return {
+      tone: 'borderline',
+      label: 'Borderline Deal',
+      feedback: 'Marginal deal - review carefully',
+    };
+  }
+
+  return {
+    tone: 'risk',
+    label: 'High Risk Deal',
+    feedback: 'High risk - likely unsuitable',
+  };
 }
 
 function loadSavedDeals() {
@@ -244,12 +268,7 @@ function App() {
     }
   }
 
-  const viabilityLabel =
-    metrics.viabilityScore >= 75
-      ? 'Strong Deal'
-      : metrics.viabilityScore >= 45
-      ? 'Borderline Deal'
-      : 'High Risk Deal';
+  const dealQuality = getDealQuality(metrics.viabilityScore);
 
   const groupedFields = fields.reduce((groups, field) => {
     groups[field.group] = groups[field.group] || [];
@@ -260,9 +279,13 @@ function App() {
   return (
     <div className="app-shell">
       <header className="top-bar">
-        <div>
-          <p className="eyebrow">Portfolio dashboard</p>
-          <h1>BRRR Deal Analyzer</h1>
+        <div className="brand-block">
+          <div className="brand-mark">B</div>
+          <div>
+            <p className="eyebrow">Investor underwriting workspace</p>
+            <h1>BRRR Deal Analyzer</h1>
+            <p className="tagline">Screen refinance potential, cashflow, and capital left in every deal.</p>
+          </div>
         </div>
 
         <div className="top-actions">
@@ -273,6 +296,26 @@ function App() {
         </div>
       </header>
 
+      <section className="summary-strip" aria-label="Deal summary">
+        <div className="summary-card primary">
+          <span>Monthly cashflow</span>
+          <strong>{formatMoney(metrics.monthlyCashflow)}</strong>
+          <p>After estimated interest-only finance</p>
+        </div>
+
+        <div className="summary-card primary">
+          <span>Estimated ROI</span>
+          <strong>{formatPercent(metrics.roi)}</strong>
+          <p>Based on cash left after refinance</p>
+        </div>
+
+        <div className={`summary-card score ${dealQuality.tone}`}>
+          <span>Deal score</span>
+          <strong>{metrics.viabilityScore}/100</strong>
+          <p>{dealQuality.feedback}</p>
+        </div>
+      </section>
+
       <main className="dashboard-grid">
         <section className="panel input-panel">
           <div className="panel-heading">
@@ -280,7 +323,7 @@ function App() {
               <span>Step 1</span>
               <h2>Deal Inputs</h2>
             </div>
-            <p>{activeDealId ? 'Loaded saved deal' : 'Unsaved scenario'}</p>
+            <p>{activeDealId ? 'Saved deal loaded' : 'Unsaved scenario'}</p>
           </div>
 
           {Object.entries(groupedFields).map(([group, items]) => (
@@ -311,13 +354,19 @@ function App() {
         </section>
 
         <section className="panel score-panel">
-          <div className="score-card">
+          <div className="panel-heading">
+            <div>
+              <span>Step 2</span>
+              <h2>Investment Analysis</h2>
+            </div>
+            <p>{dealQuality.label}</p>
+          </div>
+
+          <div className={`score-card ${dealQuality.tone}`}>
             <div>
               <span>BRRR viability score</span>
               <strong>{metrics.viabilityScore}/100</strong>
-              <p className={metrics.viabilityScore >= 75 ? 'good' : metrics.viabilityScore >= 45 ? 'warn' : 'bad'}>
-                {viabilityLabel}
-              </p>
+              <p>{dealQuality.feedback}</p>
             </div>
 
             <div
@@ -329,21 +378,21 @@ function App() {
 
           <div className="metric-list">
             <Result label="Monthly cashflow" value={formatMoney(metrics.monthlyCashflow)} highlight />
+            <Result label="Estimated ROI" value={formatPercent(metrics.roi)} highlight />
             <Result label="Annual cashflow" value={formatMoney(metrics.annualCashflow)} />
             <Result label="Gross yield" value={formatPercent(metrics.grossYield)} />
             <Result label="Net yield" value={formatPercent(metrics.netYield)} />
             <Result label="Total cash invested" value={formatMoney(metrics.totalCashInvested)} />
             <Result label="Stamp duty estimate" value={formatMoney(metrics.stampDuty)} />
             <Result label="Refinance loan" value={formatMoney(metrics.refinanceLoan)} />
-            <Result label="Cash left in deal" value={formatMoney(metrics.cashLeftInDeal)} highlight />
-            <Result label="Estimated ROI" value={formatPercent(metrics.roi)} />
+            <Result label="Cash left in deal" value={formatMoney(metrics.cashLeftInDeal)} />
           </div>
         </section>
 
         <section className="panel saved-panel">
           <div className="panel-heading">
             <div>
-              <span>Step 2</span>
+              <span>Portfolio</span>
               <h2>Saved Deals</h2>
             </div>
             <p>{savedDeals.length} saved</p>
@@ -352,51 +401,63 @@ function App() {
           {savedDeals.length === 0 ? (
             <div className="empty-state">
               <strong>No saved deals yet</strong>
-              <p>Save the current analysis to build a shortlist you can compare later.</p>
+              <p>Save this analysis to start building a shortlist of opportunities.</p>
             </div>
           ) : (
             <div className="saved-list">
-              {savedDeals.map((deal) => (
-                <article
-                  className={deal.id === activeDealId ? 'saved-deal active' : 'saved-deal'}
-                  key={deal.id}
-                >
-                  <div className="saved-main">
-                    <div>
-                      <h3>{deal.name}</h3>
-                      <p>
-                        {formatMoney(deal.inputs.purchasePrice)} purchase ·{' '}
-                        {formatMoney(deal.inputs.refinanceValue)} refinance
-                      </p>
+              {savedDeals.map((deal) => {
+                const savedQuality = getDealQuality(deal.metrics.viabilityScore);
+
+                return (
+                  <article
+                    className={deal.id === activeDealId ? 'saved-deal active' : 'saved-deal'}
+                    key={deal.id}
+                  >
+                    <div className="saved-main">
+                      <div>
+                        <h3>{deal.name}</h3>
+                        <p>{formatMoney(deal.inputs.purchasePrice)} purchase price</p>
+                      </div>
+
+                      <div className={`saved-score ${savedQuality.tone}`}>
+                        {deal.metrics.viabilityScore}
+                      </div>
                     </div>
 
-                    <div className="saved-score">{deal.metrics.viabilityScore}</div>
-                  </div>
+                    <div className="saved-metrics">
+                      <span>
+                        <small>Cashflow</small>
+                        {formatMoney(deal.metrics.monthlyCashflow)}
+                      </span>
+                      <span>
+                        <small>ROI</small>
+                        {formatPercent(deal.metrics.roi)}
+                      </span>
+                    </div>
 
-                  <div className="saved-metrics">
-                    <span>{formatMoney(deal.metrics.monthlyCashflow)} / mo</span>
-                    <span>{formatPercent(deal.metrics.roi)} ROI</span>
-                  </div>
-
-                  <div className="saved-actions">
-                    <button className="secondary-btn" type="button" onClick={() => loadDeal(deal)}>
-                      Load
-                    </button>
-                    <button className="danger-btn" type="button" onClick={() => deleteDeal(deal.id)}>
-                      Delete
-                    </button>
-                  </div>
-                </article>
-              ))}
+                    <div className="saved-actions">
+                      <button className="secondary-btn" type="button" onClick={() => loadDeal(deal)}>
+                        Load
+                      </button>
+                      <button className="danger-btn" type="button" onClick={() => deleteDeal(deal.id)}>
+                        Delete
+                      </button>
+                    </div>
+                  </article>
+                );
+              })}
             </div>
           )}
         </section>
       </main>
 
-      <p className="disclaimer">
-        Stamp duty uses England and Northern Ireland residential rates with the additional-property
-        surcharge. This is an early planning tool, not financial or tax advice.
-      </p>
+      <footer className="footer-note">
+        <span>BRRR Deal Analyzer</span>
+        <p>
+          For early-stage screening only. Calculations are estimates and do not constitute financial,
+          tax, mortgage, or investment advice.
+        </p>
+      </footer>
     </div>
   );
 }
