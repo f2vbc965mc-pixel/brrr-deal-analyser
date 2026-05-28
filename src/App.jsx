@@ -310,89 +310,87 @@ function App() {
           ))}
         </section>
 
-        <aside className="right-column">
-          <section className="panel score-panel">
-            <div className="score-card">
-              <div>
-                <span>BRRR viability score</span>
-                <strong>{metrics.viabilityScore}/100</strong>
-                <p className={metrics.viabilityScore >= 75 ? 'good' : metrics.viabilityScore >= 45 ? 'warn' : 'bad'}>
-                  {viabilityLabel}
-                </p>
-              </div>
-
-              <div
-                className="score-ring"
-                style={{ '--score': `${metrics.viabilityScore}%` }}
-                aria-hidden="true"
-              />
+        <section className="panel score-panel">
+          <div className="score-card">
+            <div>
+              <span>BRRR viability score</span>
+              <strong>{metrics.viabilityScore}/100</strong>
+              <p className={metrics.viabilityScore >= 75 ? 'good' : metrics.viabilityScore >= 45 ? 'warn' : 'bad'}>
+                {viabilityLabel}
+              </p>
             </div>
 
-            <div className="metric-list">
-              <Result label="Monthly cashflow" value={formatMoney(metrics.monthlyCashflow)} highlight />
-              <Result label="Annual cashflow" value={formatMoney(metrics.annualCashflow)} />
-              <Result label="Gross yield" value={formatPercent(metrics.grossYield)} />
-              <Result label="Net yield" value={formatPercent(metrics.netYield)} />
-              <Result label="Total cash invested" value={formatMoney(metrics.totalCashInvested)} />
-              <Result label="Stamp duty estimate" value={formatMoney(metrics.stampDuty)} />
-              <Result label="Refinance loan" value={formatMoney(metrics.refinanceLoan)} />
-              <Result label="Cash left in deal" value={formatMoney(metrics.cashLeftInDeal)} highlight />
-              <Result label="Estimated ROI" value={formatPercent(metrics.roi)} />
+            <div
+              className="score-ring"
+              style={{ '--score': `${metrics.viabilityScore}%` }}
+              aria-hidden="true"
+            />
+          </div>
+
+          <div className="metric-list">
+            <Result label="Monthly cashflow" value={formatMoney(metrics.monthlyCashflow)} highlight />
+            <Result label="Annual cashflow" value={formatMoney(metrics.annualCashflow)} />
+            <Result label="Gross yield" value={formatPercent(metrics.grossYield)} />
+            <Result label="Net yield" value={formatPercent(metrics.netYield)} />
+            <Result label="Total cash invested" value={formatMoney(metrics.totalCashInvested)} />
+            <Result label="Stamp duty estimate" value={formatMoney(metrics.stampDuty)} />
+            <Result label="Refinance loan" value={formatMoney(metrics.refinanceLoan)} />
+            <Result label="Cash left in deal" value={formatMoney(metrics.cashLeftInDeal)} highlight />
+            <Result label="Estimated ROI" value={formatPercent(metrics.roi)} />
+          </div>
+        </section>
+
+        <section className="panel saved-panel">
+          <div className="panel-heading">
+            <div>
+              <span>Step 2</span>
+              <h2>Saved Deals</h2>
             </div>
-          </section>
+            <p>{savedDeals.length} saved</p>
+          </div>
 
-          <section className="panel saved-panel">
-            <div className="panel-heading">
-              <div>
-                <span>Step 2</span>
-                <h2>Saved Deals</h2>
-              </div>
-              <p>{savedDeals.length} saved</p>
+          {savedDeals.length === 0 ? (
+            <div className="empty-state">
+              <strong>No saved deals yet</strong>
+              <p>Save the current analysis to build a shortlist you can compare later.</p>
             </div>
-
-            {savedDeals.length === 0 ? (
-              <div className="empty-state">
-                <strong>No saved deals yet</strong>
-                <p>Save the current analysis to build a shortlist you can compare later.</p>
-              </div>
-            ) : (
-              <div className="saved-list">
-                {savedDeals.map((deal) => (
-                  <article
-                    className={deal.id === activeDealId ? 'saved-deal active' : 'saved-deal'}
-                    key={deal.id}
-                  >
-                    <div className="saved-main">
-                      <div>
-                        <h3>{deal.name}</h3>
-                        <p>
-                          {formatMoney(deal.inputs.purchasePrice)} purchase ·{' '}
-                          {formatMoney(deal.inputs.refinanceValue)} refinance
-                        </p>
-                      </div>
-
-                      <div className="saved-score">{deal.metrics.viabilityScore}</div>
+          ) : (
+            <div className="saved-list">
+              {savedDeals.map((deal) => (
+                <article
+                  className={deal.id === activeDealId ? 'saved-deal active' : 'saved-deal'}
+                  key={deal.id}
+                >
+                  <div className="saved-main">
+                    <div>
+                      <h3>{deal.name}</h3>
+                      <p>
+                        {formatMoney(deal.inputs.purchasePrice)} purchase ·{' '}
+                        {formatMoney(deal.inputs.refinanceValue)} refinance
+                      </p>
                     </div>
 
-                    <div className="saved-metrics">
-                      <span>{formatMoney(deal.metrics.monthlyCashflow)} / mo</span>
-                      <span>{formatPercent(deal.metrics.roi)} ROI</span>
-                    </div>
+                    <div className="saved-score">{deal.metrics.viabilityScore}</div>
+                  </div>
 
-                    <div className="saved-actions">
-                      <button className="secondary-btn" type="button" onClick={() => loadDeal(deal)}>
-                        Load
-                      </button>
-                      <button className="danger-btn" type="button" onClick={() => deleteDeal(deal.id)}>
-                        Delete
-                      </button>
-                    </div>
-                  </article>
-                ))}
-              </div>
-            )}
-          </section>
-        </aside>
+                  <div className="saved-metrics">
+                    <span>{formatMoney(deal.metrics.monthlyCashflow)} / mo</span>
+                    <span>{formatPercent(deal.metrics.roi)} ROI</span>
+                  </div>
+
+                  <div className="saved-actions">
+                    <button className="secondary-btn" type="button" onClick={() => loadDeal(deal)}>
+                      Load
+                    </button>
+                    <button className="danger-btn" type="button" onClick={() => deleteDeal(deal.id)}>
+                      Delete
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+        </section>
       </main>
 
       <p className="disclaimer">
