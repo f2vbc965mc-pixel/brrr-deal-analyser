@@ -13,45 +13,52 @@ const initialInputs = {
 const fields = [
   {
     name: 'purchasePrice',
-    label: 'Property purchase price',
-    prefix: 'GBP',
-    helper: 'What you expect to pay for the property.',
+    label: 'Purchase price',
+    prefix: '£',
+    helper: 'Price you expect to pay for the property.',
+    group: 'Purchase',
   },
   {
     name: 'refurbCost',
-    label: 'Estimated refurb cost',
-    prefix: 'GBP',
+    label: 'Refurbishment cost',
+    prefix: '£',
     helper: 'Works needed before refinance or letting.',
+    group: 'Purchase',
+  },
+  {
+    name: 'legalFees',
+    label: 'Purchase costs (legal etc.)',
+    prefix: '£',
+    helper: 'Solicitor, broker, valuation, and fees.',
+    group: 'Purchase',
   },
   {
     name: 'monthlyRent',
-    label: 'Expected monthly rent',
-    prefix: 'GBP',
-    helper: 'Gross rent before mortgage and expenses.',
+    label: 'Monthly rent',
+    prefix: '£',
+    helper: 'Expected gross rental income.',
+    group: 'Income',
   },
   {
     name: 'interestRate',
-    label: 'Mortgage interest rate',
+    label: 'Interest rate',
     suffix: '%',
-    helper: 'Annual interest rate for an interest-only mortgage.',
+    helper: 'Interest-only mortgage rate.',
+    group: 'Finance',
   },
   {
     name: 'loanToValue',
     label: 'Loan-to-value',
     suffix: '%',
-    helper: 'How much of the refinance value the lender may advance.',
+    helper: 'Percentage lender will lend on refinance value.',
+    group: 'Finance',
   },
   {
     name: 'refinanceValue',
-    label: 'Estimated refinance value',
-    prefix: 'GBP',
-    helper: 'Expected value once the refurb is complete.',
-  },
-  {
-    name: 'legalFees',
-    label: 'Legal fees estimate',
-    prefix: 'GBP',
-    helper: 'Solicitor, broker, valuation, and other buying costs.',
+    label: 'Refinance value (ARV)',
+    prefix: '£',
+    helper: 'Expected value after refurb (After Repair Value).',
+    group: 'Exit',
   },
 ];
 
@@ -68,9 +75,6 @@ function formatPercent(value) {
 }
 
 function calculateStampDuty(price) {
-  // England and Northern Ireland residential SDLT bands from 1 April 2025.
-  // BRRR investors often buy additional properties, so this estimate includes
-  // the 5% additional-property surcharge on each band.
   const bands = [
     { threshold: 125000, rate: 0.05 },
     { threshold: 250000, rate: 0.07 },
@@ -80,38 +84,33 @@ function calculateStampDuty(price) {
   ];
 
   let remaining = Math.max(price, 0);
-  let previousThreshold = 0;
-  let stampDuty = 0;
+  let previous = 0;
+  let duty = 0;
 
   for (const band of bands) {
-    const taxableAmount = Math.min(remaining, band.threshold - previousThreshold);
+    const taxable = Math.min(remaining, band.threshold - previous);
+    if (taxable <= 0) break;
 
-    if (taxableAmount <= 0) {
-      break;
-    }
-
-    stampDuty += taxableAmount * band.rate;
-    remaining -= taxableAmount;
-    previousThreshold = band.threshold;
+    duty += taxable * band.rate;
+    remaining -= taxable;
+    previous = band.threshold;
   }
 
-  return stampDuty;
+  return duty;
 }
 
-function getViabilityScore(metrics) {
-  // The score is intentionally simple for v1: each useful BRRR signal adds
-  // points, giving beginners a quick read without pretending to be advice.
+function getViabilityScore(m) {
   let score = 0;
 
-  if (metrics.monthlyCashflow > 0) score += 25;
-  if (metrics.netYield >= 6) score += 25;
-  else if (metrics.netYield >= 4) score += 15;
+  if (m.monthlyCashflow > 0) score += 25;
+  if (m.netYield >= 6) score += 25;
+  else if (m.netYield >= 4) score += 15;
 
-  if (metrics.cashLeftInDeal <= metrics.totalCashInvested * 0.25) score += 25;
-  else if (metrics.cashLeftInDeal <= metrics.totalCashInvested * 0.5) score += 15;
+  if (m.cashLeftInDeal <= m.totalCashInvested * 0.25) score += 25;
+  else if (m.cashLeftInDeal <= m.totalCashInvested * 0.5) score += 15;
 
-  if (metrics.roi >= 20) score += 25;
-  else if (metrics.roi >= 10) score += 15;
+  if (m.roi >= 20) score += 25;
+  else if (m.roi >= 10) score += 15;
 
   return Math.min(score, 100);
 }
@@ -120,40 +119,58 @@ function App() {
   const [inputs, setInputs] = useState(initialInputs);
 
   function updateInput(name, value) {
-    setInputs((currentInputs) => ({
-      ...currentInputs,
+    setInputs((prev) => ({
+      ...prev,
       [name]: Number(value),
     }));
+  }
+
+  function loadExampleDeal() {
+    setInputs({
+      purchasePrice: 180000,
+      refurbCost: 25000,
+      monthlyRent: 1450,
+      interestRate: 5.5,
+      loanToValue: 75,
+      refinanceValue: 240000,
+      legalFees: 2500,
+    });
   }
 
   const metrics = useMemo(() => {
     const stampDuty = calculateStampDuty(inputs.purchasePrice);
 
-    // Total money needed before refinance: purchase, refurb, stamp duty, and legal fees.
-    const totalCashInvested = inputs.purchasePrice + inputs.refurbCost + stampDuty + inputs.legalFees;
+    const totalCashInvested =
+      inputs.purchasePrice +
+      inputs.refurbCost +
+      stampDuty +
+      inputs.legalFees;
 
-    // A BRRR refinance is usually based on the new value after works, not the original price.
-    const refinanceLoan = inputs.refinanceValue * (inputs.loanToValue / 100);
+    const refinanceLoan =
+      inputs.refinanceValue * (inputs.loanToValue / 100);
 
-    // This v1 assumes an interest-only mortgage, which is common for rental deal analysis.
-    const monthlyMortgagePayment = (refinanceLoan * (inputs.interestRate / 100)) / 12;
-    const monthlyCashflow = inputs.monthlyRent - monthlyMortgagePayment;
+    const monthlyMortgage =
+      (refinanceLoan * (inputs.interestRate / 100)) / 12;
+
+    const monthlyCashflow = inputs.monthlyRent - monthlyMortgage;
     const annualCashflow = monthlyCashflow * 12;
 
-    // Gross yield uses rent compared with purchase price. Net yield here uses cashflow
-    // after mortgage interest compared with the total cash invested.
-    const grossYield = (inputs.monthlyRent * 12 / inputs.purchasePrice) * 100;
-    const netYield = (annualCashflow / totalCashInvested) * 100;
+    const grossYield =
+      (inputs.monthlyRent * 12 / inputs.purchasePrice) * 100;
 
-    // If the refinance loan repays all invested cash, cash left is shown as zero.
+    const netYield =
+      (annualCashflow / totalCashInvested) * 100;
+
     const cashLeftInDeal = Math.max(totalCashInvested - refinanceLoan, 0);
-    const roi = cashLeftInDeal > 0 ? (annualCashflow / cashLeftInDeal) * 100 : 0;
 
-    const calculatedMetrics = {
+    const roi =
+      cashLeftInDeal > 0 ? (annualCashflow / cashLeftInDeal) * 100 : 0;
+
+    const m = {
       stampDuty,
       totalCashInvested,
       refinanceLoan,
-      monthlyMortgagePayment,
+      monthlyMortgage,
       monthlyCashflow,
       annualCashflow,
       grossYield,
@@ -163,83 +180,121 @@ function App() {
     };
 
     return {
-      ...calculatedMetrics,
-      viabilityScore: getViabilityScore(calculatedMetrics),
+      ...m,
+      viabilityScore: getViabilityScore(m),
     };
   }, [inputs]);
 
   const viabilityLabel =
-    metrics.viabilityScore >= 75 ? 'Strong' : metrics.viabilityScore >= 45 ? 'Possible' : 'Needs work';
+    metrics.viabilityScore >= 75
+      ? 'Strong Deal'
+      : metrics.viabilityScore >= 45
+      ? 'Borderline Deal'
+      : 'High Risk Deal';
+
+  const groupedFields = fields.reduce((acc, f) => {
+    acc[f.group] = acc[f.group] || [];
+    acc[f.group].push(f);
+    return acc;
+  }, {});
 
   return (
-    <main className="app-shell">
-      <section className="calculator-panel" aria-label="BRRR deal calculator">
-        <div className="intro">
-          <p className="eyebrow">UK property investor calculator</p>
-          <h1>BRRR Deal Analyzer</h1>
-          <p>
-            Estimate cashflow, yield, refinance cash left in, and a simple BRRR viability score
-            before you spend time on deeper due diligence.
-          </p>
-        </div>
+    <div className="app-shell">
 
-        <form className="input-grid">
-          {fields.map((field) => (
-            <label className="input-card" key={field.name}>
-              <span>{field.label}</span>
-              <div className="input-wrap">
-                {field.prefix && <small>{field.prefix}</small>}
-                <input
-                  type="number"
-                  min="0"
-                  step="any"
-                  value={inputs[field.name]}
-                  onChange={(event) => updateInput(field.name, event.target.value)}
-                />
-                {field.suffix && <small>{field.suffix}</small>}
-              </div>
-              <em>{field.helper}</em>
-            </label>
+      <header className="top-bar">
+        <h2>DealScope</h2>
+        <div className="top-actions">
+          <button onClick={loadExampleDeal} className="secondary-btn">
+            Load Example
+          </button>
+          <button className="primary-btn">
+            Save Deal
+          </button>
+        </div>
+      </header>
+
+      <main className="layout">
+
+        {/* INPUT SIDE */}
+        <section className="panel">
+          <h3>Deal Inputs</h3>
+
+          {Object.entries(groupedFields).map(([group, items]) => (
+            <div key={group}>
+              <h4 className="section-title">{group}</h4>
+
+              {items.map((field) => (
+                <label key={field.name} className="input-card">
+                  <span>{field.label}</span>
+
+                  <div className="input-wrap">
+                    {field.prefix && <small>{field.prefix}</small>}
+                    <input
+                      type="number"
+                      value={inputs[field.name]}
+                      onChange={(e) =>
+                        updateInput(field.name, e.target.value)
+                      }
+                    />
+                    {field.suffix && <small>{field.suffix}</small>}
+                  </div>
+
+                  <em>{field.helper}</em>
+                </label>
+              ))}
+            </div>
           ))}
-        </form>
-      </section>
+        </section>
 
-      <aside className="results-panel" aria-label="Deal results">
-        <div className="score-card">
-          <div>
-            <span>BRRR viability score</span>
-            <strong>{metrics.viabilityScore}/100</strong>
-            <p>{viabilityLabel}</p>
+        {/* RESULTS SIDE */}
+        <aside className="panel results">
+
+          <div className="score-card">
+            <div>
+              <span>Deal Score</span>
+              <strong>{metrics.viabilityScore}/100</strong>
+              <p className={
+                viabilityLabel.includes("Strong")
+                  ? "good"
+                  : viabilityLabel.includes("Borderline")
+                  ? "warn"
+                  : "bad"
+              }>
+                {viabilityLabel}
+              </p>
+            </div>
+
+            <div
+              className="score-ring"
+              style={{ '--score': `${metrics.viabilityScore}%` }}
+            />
           </div>
-          <div
-            className="score-ring"
-            style={{ '--score': `${metrics.viabilityScore}%` }}
-            aria-hidden="true"
-          />
-        </div>
 
-        <div className="metric-list">
-          <Result label="Monthly cashflow" value={formatMoney(metrics.monthlyCashflow)} highlight />
-          <Result label="Annual cashflow" value={formatMoney(metrics.annualCashflow)} />
-          <Result label="Gross yield" value={formatPercent(metrics.grossYield)} />
-          <Result label="Net yield" value={formatPercent(metrics.netYield)} />
-          <Result label="Stamp duty estimate" value={formatMoney(metrics.stampDuty)} />
-          <Result label="Legal fees estimate" value={formatMoney(inputs.legalFees)} />
-          <Result label="Refinance loan estimate" value={formatMoney(metrics.refinanceLoan)} />
-          <Result label="Cash left after refinance" value={formatMoney(metrics.cashLeftInDeal)} highlight />
-          <Result label="Estimated ROI" value={formatPercent(metrics.roi)} />
-        </div>
+          <h3>Analysis</h3>
 
-        <p className="note">
-          Stamp duty uses England and Northern Ireland residential rates with the additional-property
-          surcharge. This is a rough planning tool, not financial or tax advice.
-        </p>
-      </aside>
-    </main>
+          <div className="metric-list">
+            <Result label="Monthly cashflow" value={formatMoney(metrics.monthlyCashflow)} highlight />
+            <Result label="Annual cashflow" value={formatMoney(metrics.annualCashflow)} />
+            <Result label="Gross yield" value={formatPercent(metrics.grossYield)} />
+            <Result label="Net yield" value={formatPercent(metrics.netYield)} />
+            <Result label="Total cash in deal" value={formatMoney(metrics.totalCashInvested)} />
+            <Result label="Refinance loan" value={formatMoney(metrics.refinanceLoan)} />
+            <Result label="Cash left in deal" value={formatMoney(metrics.cashLeftInDeal)} highlight />
+            <Result label="ROI" value={formatPercent(metrics.roi)} />
+          </div>
+
+          <p className="note">
+            This is a planning tool for early-stage deal screening only.
+          </p>
+
+        </aside>
+
+      </main>
+    </div>
   );
 }
 
-function Result({ label, value, highlight = false }) {
+function Result({ label, value, highlight }) {
   return (
     <div className={highlight ? 'metric highlight' : 'metric'}>
       <span>{label}</span>
