@@ -1,5 +1,7 @@
 import React, { useMemo, useState } from 'react';
 
+const STORAGE_KEY = 'brrr-saved-deals';
+
 const initialInputs = {
   purchasePrice: 180000,
   refurbCost: 25000,
@@ -27,9 +29,9 @@ const fields = [
   },
   {
     name: 'legalFees',
-    label: 'Purchase costs (legal etc.)',
+    label: 'Legal fees and buying costs',
     prefix: '£',
-    helper: 'Solicitor, broker, valuation, and fees.',
+    helper: 'Solicitor, broker, valuation, and other fees.',
     group: 'Purchase',
   },
   {
@@ -50,14 +52,14 @@ const fields = [
     name: 'loanToValue',
     label: 'Loan-to-value',
     suffix: '%',
-    helper: 'Percentage lender will lend on refinance value.',
+    helper: 'Percentage lender may lend on refinance value.',
     group: 'Finance',
   },
   {
     name: 'refinanceValue',
-    label: 'Refinance value (ARV)',
+    label: 'Refinance value',
     prefix: '£',
-    helper: 'Expected value after refurb (After Repair Value).',
+    helper: 'Expected value after refurb.',
     group: 'Exit',
   },
 ];
@@ -74,7 +76,25 @@ function formatPercent(value) {
   return `${(Number.isFinite(value) ? value : 0).toFixed(1)}%`;
 }
 
+function formatCompactPrice(value) {
+  const safeValue = Number.isFinite(value) ? value : 0;
+  return `£${Math.round(safeValue / 1000)}k`;
+}
+
+function formatShortDate(date) {
+  return new Intl.DateTimeFormat('en-GB', {
+    month: 'short',
+    day: 'numeric',
+  }).format(date);
+}
+
+function createDealName(inputs) {
+  return `Deal ${formatCompactPrice(inputs.purchasePrice)} - ${formatShortDate(new Date())}`;
+}
+
 function calculateStampDuty(price) {
+  // England and Northern Ireland residential SDLT bands from 1 April 2025.
+  // This estimate includes the 5% additional-property surcharge on each band.
   const bands = [
     { threshold: 125000, rate: 0.05 },
     { threshold: 250000, rate: 0.07 },
@@ -84,89 +104,93 @@ function calculateStampDuty(price) {
   ];
 
   let remaining = Math.max(price, 0);
-  let previous = 0;
-  let duty = 0;
+  let previousThreshold = 0;
+  let stampDuty = 0;
 
   for (const band of bands) {
-    const taxable = Math.min(remaining, band.threshold - previous);
-    if (taxable <= 0) break;
+    const taxableAmount = Math.min(remaining, band.threshold - previousThreshold);
 
-    duty += taxable * band.rate;
-    remaining -= taxable;
-    previous = band.threshold;
+    if (taxableAmount <= 0) {
+      break;
+    }
+
+    stampDuty += taxableAmount * band.rate;
+    remaining -= taxableAmount;
+    previousThreshold = band.threshold;
   }
 
-  return duty;
+  return stampDuty;
 }
 
-function getViabilityScore(m) {
+function getViabilityScore(metrics) {
+  // Simple v1 score: cashflow, yield, cash recycled, and ROI each contribute.
   let score = 0;
 
-  if (m.monthlyCashflow > 0) score += 25;
-  if (m.netYield >= 6) score += 25;
-  else if (m.netYield >= 4) score += 15;
+  if (metrics.monthlyCashflow > 0) score += 25;
+  if (metrics.netYield >= 6) score += 25;
+  else if (metrics.netYield >= 4) score += 15;
 
-  if (m.cashLeftInDeal <= m.totalCashInvested * 0.25) score += 25;
-  else if (m.cashLeftInDeal <= m.totalCashInvested * 0.5) score += 15;
+  if (metrics.cashLeftInDeal <= metrics.totalCashInvested * 0.25) score += 25;
+  else if (metrics.cashLeftInDeal <= metrics.totalCashInvested * 0.5) score += 15;
 
-  if (m.roi >= 20) score += 25;
-  else if (m.roi >= 10) score += 15;
+  if (metrics.roi >= 20) score += 25;
+  else if (metrics.roi >= 10) score += 15;
 
   return Math.min(score, 100);
 }
 
+function loadSavedDeals() {
+  try {
+    const savedDeals = JSON.parse(localStorage.getItem(STORAGE_KEY));
+    return Array.isArray(savedDeals) ? savedDeals : [];
+  } catch {
+    return [];
+  }
+}
+
 function App() {
   const [inputs, setInputs] = useState(initialInputs);
+  const [savedDeals, setSavedDeals] = useState(loadSavedDeals);
+  const [activeDealId, setActiveDealId] = useState(null);
+  const [saveMessage, setSaveMessage] = useState('');
 
   function updateInput(name, value) {
-    setInputs((prev) => ({
-      ...prev,
+    setInputs((currentInputs) => ({
+      ...currentInputs,
       [name]: Number(value),
     }));
-  }
 
-  function loadExampleDeal() {
-    setInputs({
-      purchasePrice: 180000,
-      refurbCost: 25000,
-      monthlyRent: 1450,
-      interestRate: 5.5,
-      loanToValue: 75,
-      refinanceValue: 240000,
-      legalFees: 2500,
-    });
+    // Once a user edits a loaded deal, it becomes a new unsaved scenario.
+    setActiveDealId(null);
+    setSaveMessage('');
   }
 
   const metrics = useMemo(() => {
     const stampDuty = calculateStampDuty(inputs.purchasePrice);
 
+    // Total money needed before refinance.
     const totalCashInvested =
-      inputs.purchasePrice +
-      inputs.refurbCost +
-      stampDuty +
-      inputs.legalFees;
+      inputs.purchasePrice + inputs.refurbCost + stampDuty + inputs.legalFees;
 
-    const refinanceLoan =
-      inputs.refinanceValue * (inputs.loanToValue / 100);
+    // BRRR refinance lending is usually based on the new value after works.
+    const refinanceLoan = inputs.refinanceValue * (inputs.loanToValue / 100);
 
-    const monthlyMortgage =
-      (refinanceLoan * (inputs.interestRate / 100)) / 12;
-
+    // This v1 assumes an interest-only mortgage for rental deal screening.
+    const monthlyMortgage = (refinanceLoan * (inputs.interestRate / 100)) / 12;
     const monthlyCashflow = inputs.monthlyRent - monthlyMortgage;
     const annualCashflow = monthlyCashflow * 12;
 
     const grossYield =
-      (inputs.monthlyRent * 12 / inputs.purchasePrice) * 100;
+      inputs.purchasePrice > 0 ? ((inputs.monthlyRent * 12) / inputs.purchasePrice) * 100 : 0;
 
     const netYield =
-      (annualCashflow / totalCashInvested) * 100;
+      totalCashInvested > 0 ? (annualCashflow / totalCashInvested) * 100 : 0;
 
+    // If the refinance covers all invested cash, cash left is shown as zero.
     const cashLeftInDeal = Math.max(totalCashInvested - refinanceLoan, 0);
+    const roi = cashLeftInDeal > 0 ? (annualCashflow / cashLeftInDeal) * 100 : 0;
 
-    const roi =
-      cashLeftInDeal > 0 ? (annualCashflow / cashLeftInDeal) * 100 : 0;
-
-    const m = {
+    const calculatedMetrics = {
       stampDuty,
       totalCashInvested,
       refinanceLoan,
@@ -180,10 +204,45 @@ function App() {
     };
 
     return {
-      ...m,
-      viabilityScore: getViabilityScore(m),
+      ...calculatedMetrics,
+      viabilityScore: getViabilityScore(calculatedMetrics),
     };
   }, [inputs]);
+
+  function saveDeals(nextDeals) {
+    setSavedDeals(nextDeals);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(nextDeals));
+  }
+
+  function saveCurrentDeal() {
+    const deal = {
+      id: crypto.randomUUID(),
+      name: createDealName(inputs),
+      createdAt: new Date().toISOString(),
+      inputs: { ...inputs },
+      metrics: { ...metrics },
+    };
+
+    saveDeals([deal, ...savedDeals]);
+    setActiveDealId(deal.id);
+    setSaveMessage(`${deal.name} saved`);
+  }
+
+  function loadDeal(deal) {
+    setInputs(deal.inputs);
+    setActiveDealId(deal.id);
+    setSaveMessage(`${deal.name} loaded`);
+  }
+
+  function deleteDeal(dealId) {
+    const nextDeals = savedDeals.filter((deal) => deal.id !== dealId);
+    saveDeals(nextDeals);
+
+    if (activeDealId === dealId) {
+      setActiveDealId(null);
+      setSaveMessage('');
+    }
+  }
 
   const viabilityLabel =
     metrics.viabilityScore >= 75
@@ -192,109 +251,159 @@ function App() {
       ? 'Borderline Deal'
       : 'High Risk Deal';
 
-  const groupedFields = fields.reduce((acc, f) => {
-    acc[f.group] = acc[f.group] || [];
-    acc[f.group].push(f);
-    return acc;
+  const groupedFields = fields.reduce((groups, field) => {
+    groups[field.group] = groups[field.group] || [];
+    groups[field.group].push(field);
+    return groups;
   }, {});
 
   return (
     <div className="app-shell">
-
       <header className="top-bar">
-        <h2>DealScope</h2>
+        <div>
+          <p className="eyebrow">Portfolio dashboard</p>
+          <h1>BRRR Deal Analyzer</h1>
+        </div>
+
         <div className="top-actions">
-          <button onClick={loadExampleDeal} className="secondary-btn">
-            Load Example
-          </button>
-          <button className="primary-btn">
+          {saveMessage && <span className="save-message">{saveMessage}</span>}
+          <button className="primary-btn" type="button" onClick={saveCurrentDeal}>
             Save Deal
           </button>
         </div>
       </header>
 
-      <main className="layout">
-
-        {/* INPUT SIDE */}
-        <section className="panel">
-          <h3>Deal Inputs</h3>
+      <main className="dashboard-grid">
+        <section className="panel input-panel">
+          <div className="panel-heading">
+            <div>
+              <span>Step 1</span>
+              <h2>Deal Inputs</h2>
+            </div>
+            <p>{activeDealId ? 'Loaded saved deal' : 'Unsaved scenario'}</p>
+          </div>
 
           {Object.entries(groupedFields).map(([group, items]) => (
-            <div key={group}>
-              <h4 className="section-title">{group}</h4>
+            <div className="input-section" key={group}>
+              <h3>{group}</h3>
 
-              {items.map((field) => (
-                <label key={field.name} className="input-card">
-                  <span>{field.label}</span>
-
-                  <div className="input-wrap">
-                    {field.prefix && <small>{field.prefix}</small>}
-                    <input
-                      type="number"
-                      value={inputs[field.name]}
-                      onChange={(e) =>
-                        updateInput(field.name, e.target.value)
-                      }
-                    />
-                    {field.suffix && <small>{field.suffix}</small>}
-                  </div>
-
-                  <em>{field.helper}</em>
-                </label>
-              ))}
+              <div className="field-grid">
+                {items.map((field) => (
+                  <label className="input-card" key={field.name}>
+                    <span>{field.label}</span>
+                    <div className="input-wrap">
+                      {field.prefix && <small>{field.prefix}</small>}
+                      <input
+                        type="number"
+                        min="0"
+                        step="any"
+                        value={inputs[field.name]}
+                        onChange={(event) => updateInput(field.name, event.target.value)}
+                      />
+                      {field.suffix && <small>{field.suffix}</small>}
+                    </div>
+                    <em>{field.helper}</em>
+                  </label>
+                ))}
+              </div>
             </div>
           ))}
         </section>
 
-        {/* RESULTS SIDE */}
-        <aside className="panel results">
+        <aside className="right-column">
+          <section className="panel score-panel">
+            <div className="score-card">
+              <div>
+                <span>BRRR viability score</span>
+                <strong>{metrics.viabilityScore}/100</strong>
+                <p className={metrics.viabilityScore >= 75 ? 'good' : metrics.viabilityScore >= 45 ? 'warn' : 'bad'}>
+                  {viabilityLabel}
+                </p>
+              </div>
 
-          <div className="score-card">
-            <div>
-              <span>Deal Score</span>
-              <strong>{metrics.viabilityScore}/100</strong>
-              <p className={
-                viabilityLabel.includes("Strong")
-                  ? "good"
-                  : viabilityLabel.includes("Borderline")
-                  ? "warn"
-                  : "bad"
-              }>
-                {viabilityLabel}
-              </p>
+              <div
+                className="score-ring"
+                style={{ '--score': `${metrics.viabilityScore}%` }}
+                aria-hidden="true"
+              />
             </div>
 
-            <div
-              className="score-ring"
-              style={{ '--score': `${metrics.viabilityScore}%` }}
-            />
-          </div>
+            <div className="metric-list">
+              <Result label="Monthly cashflow" value={formatMoney(metrics.monthlyCashflow)} highlight />
+              <Result label="Annual cashflow" value={formatMoney(metrics.annualCashflow)} />
+              <Result label="Gross yield" value={formatPercent(metrics.grossYield)} />
+              <Result label="Net yield" value={formatPercent(metrics.netYield)} />
+              <Result label="Total cash invested" value={formatMoney(metrics.totalCashInvested)} />
+              <Result label="Stamp duty estimate" value={formatMoney(metrics.stampDuty)} />
+              <Result label="Refinance loan" value={formatMoney(metrics.refinanceLoan)} />
+              <Result label="Cash left in deal" value={formatMoney(metrics.cashLeftInDeal)} highlight />
+              <Result label="Estimated ROI" value={formatPercent(metrics.roi)} />
+            </div>
+          </section>
 
-          <h3>Analysis</h3>
+          <section className="panel saved-panel">
+            <div className="panel-heading">
+              <div>
+                <span>Step 2</span>
+                <h2>Saved Deals</h2>
+              </div>
+              <p>{savedDeals.length} saved</p>
+            </div>
 
-          <div className="metric-list">
-            <Result label="Monthly cashflow" value={formatMoney(metrics.monthlyCashflow)} highlight />
-            <Result label="Annual cashflow" value={formatMoney(metrics.annualCashflow)} />
-            <Result label="Gross yield" value={formatPercent(metrics.grossYield)} />
-            <Result label="Net yield" value={formatPercent(metrics.netYield)} />
-            <Result label="Total cash in deal" value={formatMoney(metrics.totalCashInvested)} />
-            <Result label="Refinance loan" value={formatMoney(metrics.refinanceLoan)} />
-            <Result label="Cash left in deal" value={formatMoney(metrics.cashLeftInDeal)} highlight />
-            <Result label="ROI" value={formatPercent(metrics.roi)} />
-          </div>
+            {savedDeals.length === 0 ? (
+              <div className="empty-state">
+                <strong>No saved deals yet</strong>
+                <p>Save the current analysis to build a shortlist you can compare later.</p>
+              </div>
+            ) : (
+              <div className="saved-list">
+                {savedDeals.map((deal) => (
+                  <article
+                    className={deal.id === activeDealId ? 'saved-deal active' : 'saved-deal'}
+                    key={deal.id}
+                  >
+                    <div className="saved-main">
+                      <div>
+                        <h3>{deal.name}</h3>
+                        <p>
+                          {formatMoney(deal.inputs.purchasePrice)} purchase ·{' '}
+                          {formatMoney(deal.inputs.refinanceValue)} refinance
+                        </p>
+                      </div>
 
-          <p className="note">
-            This is a planning tool for early-stage deal screening only.
-          </p>
+                      <div className="saved-score">{deal.metrics.viabilityScore}</div>
+                    </div>
 
+                    <div className="saved-metrics">
+                      <span>{formatMoney(deal.metrics.monthlyCashflow)} / mo</span>
+                      <span>{formatPercent(deal.metrics.roi)} ROI</span>
+                    </div>
+
+                    <div className="saved-actions">
+                      <button className="secondary-btn" type="button" onClick={() => loadDeal(deal)}>
+                        Load
+                      </button>
+                      <button className="danger-btn" type="button" onClick={() => deleteDeal(deal.id)}>
+                        Delete
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
         </aside>
-
       </main>
+
+      <p className="disclaimer">
+        Stamp duty uses England and Northern Ireland residential rates with the additional-property
+        surcharge. This is an early planning tool, not financial or tax advice.
+      </p>
     </div>
   );
 }
 
-function Result({ label, value, highlight }) {
+function Result({ label, value, highlight = false }) {
   return (
     <div className={highlight ? 'metric highlight' : 'metric'}>
       <span>{label}</span>
