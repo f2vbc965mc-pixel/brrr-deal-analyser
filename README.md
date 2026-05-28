@@ -45,3 +45,4 @@ src/main.jsx      React app entry point
 index.html        Page shell used by Vite
 package.json      Scripts and dependencies
 ```
+# brrr-deal-analyser
