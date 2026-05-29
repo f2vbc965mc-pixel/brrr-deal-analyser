@@ -180,6 +180,20 @@ function loadSavedDeals() {
   }
 }
 
+function getDashboardStats() {
+  const savedDeals = loadSavedDeals();
+  const bestRoi = savedDeals.reduce((best, deal) => Math.max(best, deal.metrics?.cashOnCashRoi || 0), 0);
+  const bestCashflow = savedDeals.reduce((best, deal) => Math.max(best, deal.metrics?.monthlyCashflow || 0), 0);
+
+  return {
+    dealsAnalysed: savedDeals.length,
+    savedScenarios: savedDeals.length,
+    bestRoi,
+    bestCashflow,
+    recentDeals: savedDeals.slice(0, 3),
+  };
+}
+
 function groupFields(fieldsToGroup) {
   return fieldsToGroup.reduce((groups, field) => {
     groups[field.group] = groups[field.group] || [];
@@ -368,6 +382,24 @@ function getAirbnbInsights(metrics) {
   ];
 }
 
+function getBrrrHealthSummary(metrics) {
+  return [
+    { label: 'Cashflow', status: metrics.monthlyCashflow >= 300 ? 'Strong' : metrics.monthlyCashflow > 0 ? 'Moderate' : 'Weak' },
+    { label: 'Yield', status: metrics.grossYield >= 7 ? 'Strong' : metrics.grossYield >= 5 ? 'Moderate' : 'Weak' },
+    { label: 'Refinance Position', status: metrics.cashLeftInDeal <= metrics.totalCashInvested * 0.3 ? 'Strong' : metrics.cashLeftInDeal <= metrics.totalCashInvested * 0.55 ? 'Moderate' : 'Weak' },
+    { label: 'Risk Buffer', status: metrics.breakEvenRent <= metrics.effectiveMonthlyRent * 0.9 ? 'Strong' : metrics.breakEvenRent <= metrics.effectiveMonthlyRent ? 'Moderate' : 'Weak' },
+  ];
+}
+
+function getAirbnbHealthSummary(metrics) {
+  return [
+    { label: 'Cashflow', status: metrics.monthlyProfit >= 500 ? 'Strong' : metrics.monthlyProfit > 0 ? 'Moderate' : 'Weak' },
+    { label: 'Yield', status: metrics.airbnbYield >= 8 ? 'Strong' : metrics.airbnbYield >= 5 ? 'Moderate' : 'Weak' },
+    { label: 'Refinance Position', status: 'Moderate' },
+    { label: 'Risk Buffer', status: metrics.breakEvenOccupancy <= 55 ? 'Strong' : metrics.breakEvenOccupancy <= 70 ? 'Moderate' : 'Weak' },
+  ];
+}
+
 function App() {
   return (
     <Routes>
@@ -376,6 +408,9 @@ function App() {
         <Route path="dashboard" element={<DashboardPage />} />
         <Route path="brrr" element={<BrrrAnalyzerPage />} />
         <Route path="airbnb" element={<AirbnbAnalyzerPage />} />
+        <Route path="professional-tools" element={<ProfessionalToolsPage />} />
+        <Route path="operating-system" element={<OperatingSystemPage />} />
+        <Route path="portfolio" element={<PortfolioBlueprintPage />} />
         <Route path="*" element={<NotFoundPage />} />
       </Route>
     </Routes>
@@ -415,9 +450,12 @@ function Shell() {
           <NavLink to="/airbnb" onClick={() => setMenuOpen(false)}>
             Airbnb Analyzer
           </NavLink>
-          <a href="/dashboard#modules" onClick={() => setMenuOpen(false)}>
-            Future Modules
-          </a>
+          <NavLink to="/professional-tools" onClick={() => setMenuOpen(false)}>
+            Pro Tools
+          </NavLink>
+          <NavLink to="/operating-system" onClick={() => setMenuOpen(false)}>
+            Premium
+          </NavLink>
           <Link className="nav-cta" to="/" onClick={() => setMenuOpen(false)}>
             Start Free
           </Link>
@@ -560,6 +598,7 @@ function LandingPage() {
 }
 
 function DashboardPage() {
+  const stats = getDashboardStats();
   const modules = [
     {
       title: 'BRRR Analyzer',
@@ -588,6 +627,7 @@ function DashboardPage() {
       status: 'Pro Feature',
       copy: 'Save, compare and monitor your deal pipeline.',
       action: 'Preview',
+      to: '/portfolio',
     },
   ];
 
@@ -597,6 +637,19 @@ function DashboardPage() {
         <p className="eyebrow">PropertyIQ workspace</p>
         <h1>Investment Dashboard</h1>
         <p>Choose a module to analyse your next opportunity.</p>
+      </section>
+
+      <section className="dashboard-summary">
+        <SummaryCard label="Deals Analysed" value={String(stats.dealsAnalysed)} copy="Saved BRRR scenarios in this browser." />
+        <SummaryCard label="Saved Scenarios" value={String(stats.savedScenarios)} copy="Prepared for future deal comparison." />
+        <SummaryCard label="Best ROI" value={stats.bestRoi > 0 ? formatPercent(stats.bestRoi) : 'No data'} copy="Best saved cash-on-cash ROI." />
+        <SummaryCard label="Best Cashflow" value={stats.bestCashflow > 0 ? formatMoney(stats.bestCashflow) : 'No data'} copy="Highest saved monthly cashflow." />
+      </section>
+
+      <section className="membership-grid">
+        <MembershipTier title="Free" badge="Current" items={['BRRR Analyzer', 'Airbnb early access', 'Limited saved scenarios']} />
+        <MembershipTier title="Pro" badge="Preview" items={['PDF Investment Reports', 'Advanced Deal Comparison', 'Unlimited Saved Deals']} />
+        <MembershipTier title="Premium" badge="Roadmap" items={['Portfolio Tracker', 'Deal Pipeline', 'Investor Operating System']} />
       </section>
 
       <section id="modules" className="module-grid">
@@ -618,6 +671,39 @@ function DashboardPage() {
             )}
           </article>
         ))}
+      </section>
+
+      <section className="retention-grid">
+        <DashboardPanel title="Recent Analyses" meta="Local browser">
+          {stats.recentDeals.length > 0 ? (
+            stats.recentDeals.map((deal) => (
+              <p key={deal.id}>{deal.name} · {formatMoney(deal.metrics.monthlyCashflow)} monthly cashflow</p>
+            ))
+          ) : (
+            <EmptyLine text="No recent saved analyses yet. Open a module and save your first scenario." />
+          )}
+        </DashboardPanel>
+        <DashboardPanel title="Saved Scenarios" meta="Compare framework">
+          <EmptyLine text="Scenario comparison is prepared for Pro. Saved BRRR deals already appear inside the analyzer." />
+        </DashboardPanel>
+        <DashboardPanel title="Investor Notes" meta="Coming soon">
+          <EmptyLine text="A lightweight notes layer will help capture assumptions, broker feedback and due-diligence tasks." />
+        </DashboardPanel>
+        <DashboardPanel title="Future Watchlist" meta="Premium">
+          <EmptyLine text="Track target areas, target yields and deals to revisit when pricing changes." />
+        </DashboardPanel>
+      </section>
+
+      <section className="upgrade-strip glass-card">
+        <div>
+          <p className="eyebrow">Professional investor tools</p>
+          <h2>Upgrade pathways without blocking the core analyzer</h2>
+          <p>Free users can analyse deals today. Pro and Premium previews show where reports, comparison and portfolio workflows will expand next.</p>
+        </div>
+        <div className="hero-actions">
+          <Link className="primary-link" to="/professional-tools">View Pro Tools</Link>
+          <Link className="secondary-link" to="/operating-system">Premium Roadmap</Link>
+        </div>
       </section>
     </main>
   );
@@ -707,6 +793,7 @@ function BrrrAnalyzerPage() {
       ...calculatedMetrics,
       rating: getDealRating(calculatedMetrics),
       verdict: getDealVerdict(calculatedMetrics),
+      healthSummary: getBrrrHealthSummary(calculatedMetrics),
     };
   }, [inputs, scenario]);
 
@@ -809,7 +896,7 @@ function BrrrAnalyzerPage() {
         </div>
 
         <div className="side-stack">
-          <DecisionPanel health={health} verdict={metrics.verdict} benchmarks={benchmarks} insights={insightCards} />
+          <DecisionPanel health={health} healthSummary={metrics.healthSummary} verdict={metrics.verdict} benchmarks={benchmarks} insights={insightCards} />
           <div className="panel">
             <PanelHeading label="Sensitivity" title="Rate and Rent Stress Test" meta="Live" />
             <MiniTable title="Interest rate sensitivity" rows={metrics.interestSensitivity} />
@@ -928,6 +1015,11 @@ function AirbnbAnalyzerPage() {
       breakEvenNightlyRate,
       breakEvenMonthlyRevenue,
       occupancySensitivity,
+      healthSummary: getAirbnbHealthSummary({
+        monthlyProfit,
+        airbnbYield,
+        breakEvenOccupancy,
+      }),
     };
   }, [inputs, scenario]);
 
@@ -988,6 +1080,7 @@ function AirbnbAnalyzerPage() {
         <div className="side-stack">
           <DecisionPanel
             health={health}
+            healthSummary={metrics.healthSummary}
             verdict={metrics.comparison}
             benchmarks={[
               'Short-term rental performance depends heavily on local demand, regulation and operational standards.',
@@ -1002,6 +1095,95 @@ function AirbnbAnalyzerPage() {
             <MiniTable title="Monthly profit by occupancy" rows={metrics.occupancySensitivity} />
           </div>
         </div>
+      </section>
+    </main>
+  );
+}
+
+function ProfessionalToolsPage() {
+  const tools = [
+    { title: 'AI Investor Verdict', tier: 'Pro Preview', copy: 'Generate concise professional commentary from the deal metrics and assumptions.' },
+    { title: 'Deal Health Check', tier: 'Included', copy: 'Strengths, risks and opportunities based on cashflow, yield and refinance position.' },
+    { title: 'Sensitivity Analysis', tier: 'Included', copy: 'Stress-test the main assumptions before committing time or capital.' },
+    { title: 'Scenario Testing', tier: 'Included', copy: 'Compare conservative, expected and optimistic views of a deal.' },
+    { title: 'Unlimited Saved Deals', tier: 'Pro Preview', copy: 'Build a larger underwriting pipeline without local saved-deal limits.' },
+    { title: 'PDF Investment Reports', tier: 'Pro Preview', copy: 'Export clean investor reports for lenders, partners or internal review.' },
+    { title: 'Advanced Deal Comparison', tier: 'Pro Preview', copy: 'Compare Deal A and Deal B across cashflow, yield, ROI, risk and capital left in.' },
+  ];
+
+  return (
+    <main className="page roadmap-page">
+      <section className="page-hero compact">
+        <p className="eyebrow">Free / Pro ecosystem</p>
+        <h1>Professional Investor Tools</h1>
+        <p>Visible upgrade pathways for serious investors without blocking the active free analysis tools.</p>
+      </section>
+
+      <section className="membership-grid">
+        <MembershipTier title="Free" badge="Current" items={['BRRR Analyzer', 'Airbnb Early Access', 'Saved deals in browser']} />
+        <MembershipTier title="Pro" badge="Preview" items={['Unlimited saved deals', 'PDF reports', 'Advanced deal comparison']} />
+        <MembershipTier title="Premium" badge="Roadmap" items={['Operating system', 'Portfolio tracker', 'Investor CRM']} />
+      </section>
+
+      <section className="module-grid">
+        {tools.map((tool) => (
+          <RoadmapCard key={tool.title} title={tool.title} badge={tool.tier} copy={tool.copy} />
+        ))}
+      </section>
+
+      <DealComparisonPreview />
+    </main>
+  );
+}
+
+function OperatingSystemPage() {
+  const features = [
+    { title: 'Portfolio Tracker', copy: 'Monitor properties, cashflow and portfolio yield from one workspace.' },
+    { title: 'Deal Pipeline', copy: 'Track leads from sourced to offered, financed, refurbished and refinanced.' },
+    { title: 'Growth Forecasting', copy: 'Model acquisition velocity, equity growth and cashflow expansion.' },
+    { title: 'Deal Vault', copy: 'Store reports, assumptions, viewing notes and due-diligence documents.' },
+    { title: 'Investor CRM', copy: 'Manage agents, brokers, sourcers, partners and lender relationships.' },
+    { title: 'Future Marketplace Access', copy: 'Prepare for curated services, reports and deal-support integrations.' },
+  ];
+
+  return (
+    <main className="page roadmap-page">
+      <section className="page-hero compact">
+        <p className="eyebrow">Premium roadmap</p>
+        <h1>Investor Operating System</h1>
+        <p>A roadmap for turning PropertyIQ from analysis software into a full investment workflow platform.</p>
+      </section>
+
+      <section className="module-grid">
+        {features.map((feature) => (
+          <RoadmapCard key={feature.title} title={feature.title} badge="Premium" copy={feature.copy} />
+        ))}
+      </section>
+    </main>
+  );
+}
+
+function PortfolioBlueprintPage() {
+  const sections = [
+    { title: 'Properties', copy: 'No properties added yet. Future portfolio records will appear here.' },
+    { title: 'Monthly Cashflow', copy: 'Aggregate portfolio income and costs will be summarised here.' },
+    { title: 'Equity Estimate', copy: 'Track estimated equity based on valuations and outstanding debt.' },
+    { title: 'Portfolio Yield', copy: 'Review income performance across the whole portfolio.' },
+    { title: 'Acquisition Pipeline', copy: 'Monitor potential acquisitions from first review to completion.' },
+  ];
+
+  return (
+    <main className="page roadmap-page">
+      <section className="page-hero compact">
+        <p className="eyebrow">Premium blueprint</p>
+        <h1>Portfolio Tracker</h1>
+        <p>A future workspace for monitoring live assets, acquisition pipeline and portfolio-level performance.</p>
+      </section>
+
+      <section className="module-grid">
+        {sections.map((section) => (
+          <RoadmapCard key={section.title} title={section.title} badge="Premium Placeholder" copy={section.copy} />
+        ))}
       </section>
     </main>
   );
@@ -1052,13 +1234,22 @@ function ScenarioToggle({ scenario, setScenario }) {
   );
 }
 
-function DecisionPanel({ health, verdict, benchmarks, insights }) {
+function DecisionPanel({ health, healthSummary = [], verdict, benchmarks, insights }) {
   return (
     <div className="panel decision-panel">
       <PanelHeading label="Decision support" title="Deal Health Check" meta="Live insights" />
       <div className="verdict-box">
         <span>Investor verdict</span>
         <p>{verdict}</p>
+      </div>
+
+      <div className="health-summary">
+        {healthSummary.map((item) => (
+          <div className={`health-pill ${item.status.toLowerCase()}`} key={item.label}>
+            <span>{item.label}</span>
+            <strong>{item.status}</strong>
+          </div>
+        ))}
       </div>
 
       <HealthColumn title="Strengths" items={health.strengths} empty="No clear strengths yet. Add more assumptions or improve the numbers." />
@@ -1207,6 +1398,75 @@ function WorkflowStep({ number, title, copy }) {
       <h3>{title}</h3>
       <p>{copy}</p>
     </article>
+  );
+}
+
+function MembershipTier({ title, badge, items }) {
+  return (
+    <article className="membership-card glass-card">
+      <span>{badge}</span>
+      <h3>{title}</h3>
+      <ul>
+        {items.map((item) => (
+          <li key={item}>{item}</li>
+        ))}
+      </ul>
+    </article>
+  );
+}
+
+function DashboardPanel({ title, meta, children }) {
+  return (
+    <article className="dashboard-panel glass-card">
+      <div className="preview-header">
+        <h3>{title}</h3>
+        <strong>{meta}</strong>
+      </div>
+      <div className="dashboard-panel-body">{children}</div>
+    </article>
+  );
+}
+
+function EmptyLine({ text }) {
+  return <p className="empty-line">{text}</p>;
+}
+
+function RoadmapCard({ title, badge, copy }) {
+  return (
+    <article className="module-card roadmap-card">
+      <div>
+        <span>{badge}</span>
+        <h2>{title}</h2>
+        <p>{copy}</p>
+      </div>
+      <button className="module-action muted" type="button">
+        Preview
+      </button>
+    </article>
+  );
+}
+
+function DealComparisonPreview() {
+  const rows = ['Cashflow', 'Yield', 'ROI', 'Risk', 'Capital Left In'];
+
+  return (
+    <section className="comparison-preview glass-card">
+      <SectionHeading
+        label="Pro comparison framework"
+        title="Advanced Deal Comparison"
+        copy="A prepared framework for comparing saved scenarios side by side when Pro comparison tools are enabled."
+      />
+      <div className="comparison-grid">
+        <div>
+          <h3>Deal A</h3>
+          {rows.map((row) => <span key={row}>{row}</span>)}
+        </div>
+        <div>
+          <h3>Deal B</h3>
+          {rows.map((row) => <span key={row}>{row}</span>)}
+        </div>
+      </div>
+    </section>
   );
 }
 
