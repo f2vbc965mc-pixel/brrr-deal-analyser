@@ -727,6 +727,15 @@ p {
   align-items: start;
 }
 
+.forecast-layout {
+  margin-top: 16px;
+}
+
+.forecast-summary.summary-strip {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 0;
+}
+
 .pricing-card {
   display: grid;
   gap: 14px;
@@ -1795,6 +1804,7 @@ p {
   .pricing-grid,
   .vault-page-grid,
   .workspace-layout,
+  .forecast-summary.summary-strip,
   .checklist-grid,
   .legal-grid,
   .account-grid {
@@ -1858,6 +1868,7 @@ p {
   .pricing-grid,
   .vault-page-grid,
   .workspace-layout,
+  .forecast-summary.summary-strip,
   .checklist-grid,
   .legal-grid,
   .account-grid,

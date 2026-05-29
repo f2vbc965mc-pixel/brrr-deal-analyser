@@ -8,6 +8,7 @@ const UPGRADE_STORAGE_KEY = 'acquiraiq-upgrade-intent';
 const SYNC_STATUS_STORAGE_KEY = 'acquiraiq-sync-status';
 const PIPELINE_STORAGE_KEY = 'acquiraiq-pipeline';
 const PORTFOLIO_STORAGE_KEY = 'acquiraiq-portfolio';
+const CONTACTS_STORAGE_KEY = 'acquiraiq-investor-contacts';
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || '';
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
 const CLOUD_SYNC_ENABLED = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
@@ -224,6 +225,19 @@ function savePortfolioProperties(properties) {
   localStorage.setItem(PORTFOLIO_STORAGE_KEY, JSON.stringify(properties));
 }
 
+function loadInvestorContacts() {
+  try {
+    const contacts = JSON.parse(localStorage.getItem(CONTACTS_STORAGE_KEY));
+    return Array.isArray(contacts) ? contacts : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveInvestorContacts(contacts) {
+  localStorage.setItem(CONTACTS_STORAGE_KEY, JSON.stringify(contacts));
+}
+
 function addDealToPipeline(deal, stage = 'Lead') {
   const pipelineDeals = loadPipelineDeals();
   const title = deal.name || deal.title || 'Untitled opportunity';
@@ -309,6 +323,7 @@ function getWorkspacePayload() {
     vaultItems: loadDealVault(),
     pipelineDeals: loadPipelineDeals(),
     portfolioProperties: loadPortfolioProperties(),
+    investorContacts: loadInvestorContacts(),
     upgradeIntent: loadUpgradeIntent(),
     exportedAt: new Date().toISOString(),
   };
@@ -825,6 +840,105 @@ function createBrrrReport(inputs, metrics, verdict, comparison) {
   ].join('\n');
 }
 
+function createBrrrReportHtml(inputs, metrics, verdict, comparison, dealName) {
+  const rows = [
+    ['Purchase price', formatMoney(toNumber(inputs.purchasePrice))],
+    ['Refurb cost', formatMoney(toNumber(inputs.refurbCost))],
+    ['Post-refurb value / ARV', formatMoney(toNumber(inputs.refinanceValue))],
+    ['Expected monthly rent', formatMoney(toNumber(inputs.monthlyRent))],
+    ['Total cash invested', formatMoney(metrics.totalCashInvested)],
+    ['Refinance loan estimate', formatMoney(metrics.refinanceLoan)],
+    ['Cash left in deal', formatMoney(metrics.cashLeftInDeal)],
+    ['Monthly cashflow', formatMoney(metrics.monthlyCashflow)],
+    ['Annual cashflow', formatMoney(metrics.annualCashflow)],
+    ['Gross yield', formatPercent(metrics.grossYield)],
+    ['Cash-on-cash ROI', formatPercent(metrics.cashOnCashRoi)],
+  ];
+
+  return `<!doctype html>
+<html>
+  <head>
+    <title>${dealName} - AcquiraIQ Report</title>
+    <style>
+      body { font-family: Inter, Arial, sans-serif; color: #17201d; margin: 40px; line-height: 1.5; }
+      h1 { font-size: 34px; margin: 0 0 8px; }
+      h2 { margin-top: 28px; border-bottom: 1px solid #d9ded8; padding-bottom: 8px; }
+      .muted { color: #65706a; }
+      .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+      .metric { border: 1px solid #d9ded8; border-radius: 8px; padding: 12px; }
+      .metric span { display: block; color: #65706a; font-size: 12px; text-transform: uppercase; font-weight: 700; }
+      .metric strong { display: block; font-size: 18px; margin-top: 4px; }
+      li { margin-bottom: 6px; }
+      @media print { body { margin: 22mm; } button { display: none; } }
+    </style>
+  </head>
+  <body>
+    <button onclick="window.print()">Print / Save PDF</button>
+    <p class="muted">AcquiraIQ investment report · ${new Date().toLocaleString('en-GB')}</p>
+    <h1>${dealName}</h1>
+    <p class="muted">Underwriting aid only. Not financial, mortgage, tax or legal advice.</p>
+    <h2>Key Metrics</h2>
+    <div class="grid">${rows.map(([label, value]) => `<div class="metric"><span>${label}</span><strong>${value}</strong></div>`).join('')}</div>
+    <h2>Investor Verdict</h2>
+    <p><strong>Overall verdict:</strong> ${verdict.overallVerdict}</p>
+    <p><strong>Main strength:</strong> ${verdict.mainStrength}</p>
+    <p><strong>Main risk:</strong> ${verdict.mainRisk}</p>
+    <p><strong>Best strategy:</strong> ${verdict.bestStrategy}</p>
+    <p><strong>Investor suitability:</strong> ${verdict.investorSuitability}</p>
+    <h2>Recommendations</h2>
+    <ul>${(verdict.recommendations || []).map((item) => `<li>${item}</li>`).join('')}</ul>
+    <h2>Strategy Comparison</h2>
+    <p><strong>Recommended strategy:</strong> ${comparison.recommendation}</p>
+    <ul>${comparison.rows.map((row) => `<li>${row.strategy}: monthly profit ${row.monthlyProfit === null ? 'N/A' : formatMoney(row.monthlyProfit)}, yield ${row.yield === null ? 'N/A' : formatPercent(row.yield)}, ROI ${row.roi === null ? 'N/A' : formatPercent(row.roi)}, risk ${row.risk}, capital left ${row.capitalLeft === null ? 'N/A' : formatMoney(row.capitalLeft)}</li>`).join('')}</ul>
+  </body>
+</html>`;
+}
+
+function getBrrrScenarioComparisonRows(inputs) {
+  const baseValues = {
+    purchasePrice: toNumber(inputs.purchasePrice),
+    refurbCost: toNumber(inputs.refurbCost),
+    monthlyRent: toNumber(inputs.monthlyRent),
+    interestRate: toNumber(inputs.interestRate),
+    loanToValue: toNumber(inputs.loanToValue),
+    refinanceValue: toNumber(inputs.refinanceValue),
+    legalFees: toNumber(inputs.legalFees),
+    monthlyRunningCosts: toNumber(inputs.monthlyRunningCosts),
+    voidAllowance: toNumber(inputs.voidAllowance),
+  };
+
+  return ['conservative', 'expected', 'optimistic'].map((scenarioName) => {
+    const values = applyBrrrScenario(baseValues, scenarioName);
+    const stampDuty = inputs.stampDutyEstimate === '' ? calculateStampDuty(values.purchasePrice) : toNumber(inputs.stampDutyEstimate);
+    const totalCashInvested = values.purchasePrice + values.refurbCost + stampDuty + values.legalFees;
+    const refinanceLoan = values.refinanceValue * (values.loanToValue / 100);
+    const monthlyMortgage = (refinanceLoan * (values.interestRate / 100)) / 12;
+    const effectiveMonthlyRent = Math.max(values.monthlyRent - values.monthlyRent * (values.voidAllowance / 100), 0);
+    const monthlyCashflow = effectiveMonthlyRent - values.monthlyRunningCosts - monthlyMortgage;
+    const annualCashflow = monthlyCashflow * 12;
+    const cashLeftInDeal = Math.max(totalCashInvested - refinanceLoan, 0);
+    const cashOnCashRoi = totalCashInvested > 0 ? (annualCashflow / totalCashInvested) * 100 : 0;
+
+    return {
+      label: `${scenarioName[0].toUpperCase()}${scenarioName.slice(1)} case`,
+      value: `${formatMoney(monthlyCashflow)} cashflow · ${formatMoney(cashLeftInDeal)} left · ${formatPercent(cashOnCashRoi)} ROI`,
+    };
+  });
+}
+
+function openPrintableReport(html) {
+  const reportWindow = window.open('', '_blank', 'noopener,noreferrer');
+  if (!reportWindow) {
+    downloadTextFile('acquiraiq-report.html', html, 'text/html');
+    return false;
+  }
+  reportWindow.document.write(html);
+  reportWindow.document.close();
+  reportWindow.focus();
+  reportWindow.print();
+  return true;
+}
+
 function App() {
   return (
     <Routes>
@@ -837,6 +951,7 @@ function App() {
         <Route path="pricing" element={<PricingPage />} />
         <Route path="vault" element={<VaultPage />} />
         <Route path="pipeline" element={<PipelinePage />} />
+        <Route path="contacts" element={<InvestorContactsPage />} />
         <Route path="account" element={<AccountPage />} />
         <Route path="calculations" element={<CalculationsPage />} />
         <Route path="privacy" element={<PrivacyPage />} />
@@ -1092,7 +1207,7 @@ function DashboardPage() {
     {
       title: 'Portfolio Tracker',
       status: 'Active',
-      copy: 'Save, compare and monitor your deal pipeline.',
+      copy: 'Track assets, rent, equity and growth forecast.',
       action: 'Open Portfolio',
       to: '/portfolio',
       active: true,
@@ -1103,6 +1218,14 @@ function DashboardPage() {
       copy: 'Move opportunities from lead to purchased.',
       action: 'Open Pipeline',
       to: '/pipeline',
+      active: true,
+    },
+    {
+      title: 'Investor Contacts',
+      status: 'Premium',
+      copy: 'Track brokers, agents, sourcers and lenders.',
+      action: 'Open Contacts',
+      to: '/contacts',
       active: true,
     },
   ];
@@ -1434,11 +1557,15 @@ function BrrrAnalyzerPage() {
   }
 
   function exportReport() {
-    downloadTextFile(
-      `${(dealName.trim() || createDefaultDealName(inputs, 'BRRR')).toLowerCase().replaceAll(' ', '-')}-report.txt`,
-      createBrrrReport(inputs, metrics, signatureVerdict, strategyComparison),
-    );
-    setSaveMessage('Investment report exported');
+    const cleanName = dealName.trim() || createDefaultDealName(inputs, 'BRRR');
+    const opened = openPrintableReport(createBrrrReportHtml(inputs, metrics, signatureVerdict, strategyComparison, cleanName));
+    if (!opened) {
+      downloadTextFile(
+        `${cleanName.toLowerCase().replaceAll(' ', '-')}-report.txt`,
+        createBrrrReport(inputs, metrics, signatureVerdict, strategyComparison),
+      );
+    }
+    setSaveMessage(opened ? 'PDF report opened' : 'Report downloaded as backup');
   }
 
   function loadDeal(deal) {
@@ -1564,6 +1691,7 @@ function BrrrAnalyzerPage() {
               <MiniTable title="Interest rate sensitivity" rows={metrics.interestSensitivity} />
               <MiniTable title="Rent sensitivity" rows={metrics.rentSensitivity} />
               <MiniTable title="GDV sensitivity" rows={metrics.gdvSensitivity} />
+              <MiniTable title="Scenario comparison" rows={getBrrrScenarioComparisonRows(inputs)} />
               <MiniTable
                 title="Break-even analysis"
                 rows={[
@@ -1872,8 +2000,8 @@ function PlatformPage() {
           <PremiumPreview title="Sensitivity Analysis" copy="Stress-test rent, rates, GDV and occupancy before relying on a headline return." />
           <PremiumPreview title="Strategy Comparison" copy="Compare BRRR, Airbnb and BTL side by side with a recommended strategy." />
           <PremiumPreview title="Unlimited Saved Deals" copy="Build a disciplined acquisition pipeline without losing scenarios or notes." />
-          <PremiumPreview title="PDF Investment Reports" copy="Package the investment case for lenders, partners and internal review." />
-          <PremiumPreview title="Advanced Scenario Testing" copy="Model downside, expected and upside cases with transparent assumptions." />
+          <PremiumPreview title="PDF Investment Reports" copy="Open a print-ready investment report that can be saved as a PDF from the browser." />
+          <PremiumPreview title="Advanced Scenario Testing" copy="Compare conservative, expected and optimistic cases for cashflow, capital left and ROI." />
         </div>
       </section>
 
@@ -1888,8 +2016,7 @@ function PlatformPage() {
           <PremiumPreview title="Deal Pipeline" copy="Move opportunities from sourced to analysed, offered, financed and completed." />
           <PremiumPreview title="Growth Forecasting" copy="Understand how retained cashflow, equity and refinance capacity support the next acquisition." />
           <PremiumPreview title="Deal Vault" copy="Store the evidence behind each decision: assumptions, notes, scenarios and reports." />
-          <PremiumPreview title="Investor CRM" copy="Track brokers, agents, sourcers, lenders and partners around each opportunity." />
-          <PremiumPreview title="Marketplace Access" copy="Prepare for trusted services that support diligence, finance and operations." />
+          <PremiumPreview title="Investor Contacts" copy="Track brokers, agents, sourcers, lenders and partners around your acquisition workflow." />
         </div>
       </section>
 
@@ -1928,14 +2055,14 @@ function PricingPage() {
       price: '£12/mo',
       badge: 'Recommended',
       copy: 'For investors actively reviewing opportunities every month.',
-      items: ['Unlimited local scenarios', 'Investor Verdict Engine', 'Strategy Comparison', 'Report export', 'Advanced sensitivity views'],
+      items: ['Unlimited local scenarios', 'Investor Verdict Engine', 'Strategy Comparison', 'PDF-style report export', 'Advanced scenario testing'],
     },
     {
       name: 'Premium',
       price: '£29/mo',
       badge: 'Future',
       copy: 'For portfolio builders who need workflow, pipeline and reporting tools.',
-      items: ['Portfolio tracker', 'Deal pipeline', 'Growth forecasting', 'Investor CRM', 'Advanced reporting roadmap'],
+      items: ['Portfolio tracker', 'Deal pipeline', 'Growth forecasting', 'Investor contacts', 'Deal Vault workflow'],
     },
   ];
 
@@ -2108,11 +2235,12 @@ function AccountPage() {
     setMessage('Workspace exported');
   }
 
-  function clearLocalWorkspace() {
+function clearLocalWorkspace() {
     localStorage.removeItem(STORAGE_KEY);
     localStorage.removeItem(VAULT_STORAGE_KEY);
     localStorage.removeItem(PIPELINE_STORAGE_KEY);
     localStorage.removeItem(PORTFOLIO_STORAGE_KEY);
+    localStorage.removeItem(CONTACTS_STORAGE_KEY);
     localStorage.removeItem(UPGRADE_STORAGE_KEY);
     localStorage.removeItem(SYNC_STATUS_STORAGE_KEY);
     setSyncStatus(null);
@@ -2295,8 +2423,7 @@ function OperatingSystemPage() {
     { title: 'Deal Pipeline', copy: 'Track leads from sourced to offered, financed, refurbished and refinanced.' },
     { title: 'Growth Forecasting', copy: 'Model acquisition velocity, equity growth and cashflow expansion.' },
     { title: 'Deal Vault', copy: 'Store reports, assumptions, viewing notes and due-diligence documents.' },
-    { title: 'Investor CRM', copy: 'Manage agents, brokers, sourcers, partners and lender relationships.' },
-    { title: 'Future Marketplace Access', copy: 'Prepare for curated services, reports and deal-support integrations.' },
+    { title: 'Investor Contacts', copy: 'Manage agents, brokers, sourcers, partners and lender relationships.' },
   ];
 
   return (
@@ -2318,6 +2445,7 @@ function OperatingSystemPage() {
 
 function PortfolioPage() {
   const [properties, setProperties] = useState(loadPortfolioProperties);
+  const [forecast, setForecast] = useState({ years: '5', valueGrowth: '3', rentGrowth: '2' });
   const [form, setForm] = useState({
     name: '',
     purchasePrice: '',
@@ -2363,6 +2491,10 @@ function PortfolioPage() {
     }),
     { value: 0, rent: 0, equity: 0 },
   );
+  const forecastYears = Math.max(toNumber(forecast.years), 0);
+  const forecastValue = totals.value * ((1 + toNumber(forecast.valueGrowth) / 100) ** forecastYears);
+  const forecastRent = totals.rent * ((1 + toNumber(forecast.rentGrowth) / 100) ** forecastYears);
+  const forecastEquity = Math.max(forecastValue - properties.reduce((sum, property) => sum + toNumber(property.mortgageBalance), 0), 0);
 
   return (
     <main className="page portfolio-page">
@@ -2406,6 +2538,91 @@ function PortfolioPage() {
                   <div className="vault-record-footer">
                     <small>{formatMoney(property.purchasePrice)} purchase price</small>
                     <button className="inline-danger" type="button" onClick={() => deleteProperty(property.id)}>Delete</button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
+
+      <section className="workspace-layout forecast-layout">
+        <div className="panel">
+          <PanelHeading label="Growth forecasting" title="Portfolio Forecast" meta="Premium" />
+          <label className="note-entry"><span>Forecast years</span><input type="number" value={forecast.years} onChange={(event) => setForecast((current) => ({ ...current, years: event.target.value }))} /></label>
+          <label className="note-entry"><span>Annual value growth %</span><input type="number" value={forecast.valueGrowth} onChange={(event) => setForecast((current) => ({ ...current, valueGrowth: event.target.value }))} /></label>
+          <label className="note-entry"><span>Annual rent growth %</span><input type="number" value={forecast.rentGrowth} onChange={(event) => setForecast((current) => ({ ...current, rentGrowth: event.target.value }))} /></label>
+        </div>
+        <div className="summary-strip forecast-summary">
+          <SummaryCard label="Forecast Value" value={formatMoney(forecastValue)} copy={`${forecastYears} year estimate based on value growth.`} />
+          <SummaryCard label="Forecast Monthly Rent" value={formatMoney(forecastRent)} copy="Projected gross monthly rent." />
+          <SummaryCard label="Forecast Equity" value={formatMoney(forecastEquity)} copy="Forecast value less current mortgage balance." />
+        </div>
+      </section>
+    </main>
+  );
+}
+
+function InvestorContactsPage() {
+  const [contacts, setContacts] = useState(loadInvestorContacts);
+  const [form, setForm] = useState({ name: '', role: 'Agent', email: '', phone: '', notes: '' });
+
+  function updateForm(name, value) {
+    setForm((current) => ({ ...current, [name]: value }));
+  }
+
+  function saveContacts(nextContacts) {
+    setContacts(nextContacts);
+    saveInvestorContacts(nextContacts);
+  }
+
+  function addContact() {
+    if (!form.name.trim()) return;
+    saveContacts([{ ...form, id: crypto.randomUUID(), createdAt: new Date().toISOString() }, ...contacts]);
+    setForm({ name: '', role: 'Agent', email: '', phone: '', notes: '' });
+  }
+
+  function deleteContact(contactId) {
+    saveContacts(contacts.filter((contact) => contact.id !== contactId));
+  }
+
+  return (
+    <main className="page contacts-page">
+      <section className="page-hero compact">
+        <p className="eyebrow">Investor CRM</p>
+        <h1>Investor Contacts</h1>
+        <p>Keep brokers, agents, sourcers, lenders and partners close to the deal workflow.</p>
+      </section>
+
+      <section className="workspace-layout">
+        <div className="panel">
+          <PanelHeading label="Add contact" title="Relationship Details" meta="Premium" />
+          <label className="note-entry"><span>Name</span><input value={form.name} onChange={(event) => updateForm('name', event.target.value)} placeholder="Jane Smith" /></label>
+          <label className="note-entry"><span>Role</span><select className="stage-select" value={form.role} onChange={(event) => updateForm('role', event.target.value)}><option>Agent</option><option>Broker</option><option>Sourcer</option><option>Lender</option><option>Solicitor</option><option>Partner</option></select></label>
+          <label className="note-entry"><span>Email</span><input value={form.email} onChange={(event) => updateForm('email', event.target.value)} placeholder="name@example.com" /></label>
+          <label className="note-entry"><span>Phone</span><input value={form.phone} onChange={(event) => updateForm('phone', event.target.value)} placeholder="07123 456789" /></label>
+          <label className="note-entry"><span>Notes</span><textarea value={form.notes} onChange={(event) => updateForm('notes', event.target.value)} rows="3" placeholder="Area, relationship, recent deal feedback." /></label>
+          <button className="primary-btn" type="button" onClick={addContact}>Add Contact</button>
+        </div>
+
+        <div className="panel">
+          <PanelHeading label="Contacts" title="Relationship List" meta={`${contacts.length} saved`} />
+          {contacts.length === 0 ? (
+            <div className="empty-state">
+              <strong>No contacts yet</strong>
+              <p>Add a broker, agent, sourcer or lender to start building your investor network.</p>
+            </div>
+          ) : (
+            <div className="vault-list">
+              {contacts.map((contact) => (
+                <article className="vault-record" key={contact.id}>
+                  <span>{contact.role}</span>
+                  <strong>{contact.name}</strong>
+                  <p>{contact.email || 'No email'} · {contact.phone || 'No phone'}</p>
+                  {contact.notes && <p>{contact.notes}</p>}
+                  <div className="vault-record-footer">
+                    <small>{formatShortDate(new Date(contact.createdAt))}</small>
+                    <button className="inline-danger" type="button" onClick={() => deleteContact(contact.id)}>Delete</button>
                   </div>
                 </article>
               ))}
@@ -2788,7 +3005,7 @@ function RoadmapBlock() {
       <div className="roadmap-columns">
         <RoadmapColumn title="Analyse Deal" items={['BRRR Analyzer', 'Airbnb Analyzer', 'Investor Verdict', 'Sensitivity testing']} />
         <RoadmapColumn title="Manage Opportunity" items={['Named saved deals', 'Deal Vault', 'Acquisition Pipeline', 'Notes and scenarios']} />
-        <RoadmapColumn title="Track Portfolio" items={['Portfolio Tracker', 'Equity estimate', 'Total rent', 'Property records']} />
+        <RoadmapColumn title="Track Portfolio" items={['Portfolio Tracker', 'Growth forecast', 'Investor contacts', 'Property records']} />
       </div>
     </section>
   );
