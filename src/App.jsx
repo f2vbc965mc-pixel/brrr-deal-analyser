@@ -6,6 +6,8 @@ const VAULT_STORAGE_KEY = 'acquiraiq-deal-vault';
 const ACCOUNT_STORAGE_KEY = 'acquiraiq-account';
 const UPGRADE_STORAGE_KEY = 'acquiraiq-upgrade-intent';
 const SYNC_STATUS_STORAGE_KEY = 'acquiraiq-sync-status';
+const PIPELINE_STORAGE_KEY = 'acquiraiq-pipeline';
+const PORTFOLIO_STORAGE_KEY = 'acquiraiq-portfolio';
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || '';
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
 const CLOUD_SYNC_ENABLED = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
@@ -103,8 +105,8 @@ function formatShortDate(date) {
   return new Intl.DateTimeFormat('en-GB', { month: 'short', day: 'numeric' }).format(date);
 }
 
-function createDealName(inputs) {
-  return `Deal ${formatCompactPrice(inputs.purchasePrice)} - ${formatShortDate(new Date())}`;
+function createDefaultDealName(inputs, strategy = 'BRRR') {
+  return `${strategy} ${formatCompactPrice(inputs.purchasePrice)} - ${formatShortDate(new Date())}`;
 }
 
 function calculateStampDuty(price) {
@@ -196,6 +198,71 @@ function loadDealVault() {
   }
 }
 
+function loadPipelineDeals() {
+  try {
+    const pipelineDeals = JSON.parse(localStorage.getItem(PIPELINE_STORAGE_KEY));
+    return Array.isArray(pipelineDeals) ? pipelineDeals : [];
+  } catch {
+    return [];
+  }
+}
+
+function savePipelineDeals(pipelineDeals) {
+  localStorage.setItem(PIPELINE_STORAGE_KEY, JSON.stringify(pipelineDeals));
+}
+
+function loadPortfolioProperties() {
+  try {
+    const properties = JSON.parse(localStorage.getItem(PORTFOLIO_STORAGE_KEY));
+    return Array.isArray(properties) ? properties : [];
+  } catch {
+    return [];
+  }
+}
+
+function savePortfolioProperties(properties) {
+  localStorage.setItem(PORTFOLIO_STORAGE_KEY, JSON.stringify(properties));
+}
+
+function addDealToPipeline(deal, stage = 'Lead') {
+  const pipelineDeals = loadPipelineDeals();
+  const title = deal.name || deal.title || 'Untitled opportunity';
+  const existingIndex = pipelineDeals.findIndex((item) => item.sourceDealId === deal.id || item.title === title);
+  const pipelineDeal = {
+    id: existingIndex >= 0 ? pipelineDeals[existingIndex].id : crypto.randomUUID(),
+    sourceDealId: deal.id || deal.dealId || null,
+    title,
+    stage,
+    strategy: deal.strategy || deal.type || 'BRRR',
+    monthlyProfit: deal.metrics?.monthlyCashflow ?? deal.metrics?.monthlyProfit ?? null,
+    yield: deal.metrics?.grossYield ?? deal.metrics?.airbnbYield ?? null,
+    updatedAt: new Date().toISOString(),
+  };
+  const nextPipelineDeals = existingIndex >= 0
+    ? pipelineDeals.map((item, index) => (index === existingIndex ? { ...item, ...pipelineDeal } : item))
+    : [pipelineDeal, ...pipelineDeals];
+  savePipelineDeals(nextPipelineDeals);
+  return nextPipelineDeals;
+}
+
+function addDealToPortfolio(deal) {
+  const properties = loadPortfolioProperties();
+  const sourceInputs = deal.inputs || {};
+  const property = {
+    id: crypto.randomUUID(),
+    sourceDealId: deal.id || deal.dealId || null,
+    name: deal.name || deal.title || 'Portfolio property',
+    purchasePrice: toNumber(sourceInputs.purchasePrice || sourceInputs.propertyValue),
+    currentValue: toNumber(sourceInputs.refinanceValue || sourceInputs.propertyValue || sourceInputs.purchasePrice),
+    monthlyRent: toNumber(sourceInputs.monthlyRent || sourceInputs.longTermRent),
+    mortgageBalance: deal.metrics?.refinanceLoan || 0,
+    createdAt: new Date().toISOString(),
+  };
+  const nextProperties = [property, ...properties];
+  savePortfolioProperties(nextProperties);
+  return nextProperties;
+}
+
 function loadAccount() {
   try {
     const account = JSON.parse(localStorage.getItem(ACCOUNT_STORAGE_KEY));
@@ -240,6 +307,8 @@ function getWorkspacePayload() {
     account: loadAccount(),
     savedDeals: loadSavedDeals(),
     vaultItems: loadDealVault(),
+    pipelineDeals: loadPipelineDeals(),
+    portfolioProperties: loadPortfolioProperties(),
     upgradeIntent: loadUpgradeIntent(),
     exportedAt: new Date().toISOString(),
   };
@@ -307,6 +376,8 @@ async function syncWorkspaceToCloud() {
 function getDashboardStats() {
   const savedDeals = loadSavedDeals();
   const vaultItems = loadDealVault();
+  const pipelineDeals = loadPipelineDeals();
+  const portfolioProperties = loadPortfolioProperties();
   const account = loadAccount();
   const upgradeIntent = loadUpgradeIntent();
   const bestRoi = savedDeals.reduce((best, deal) => Math.max(best, deal.metrics?.cashOnCashRoi || 0), 0);
@@ -316,12 +387,15 @@ function getDashboardStats() {
     dealsAnalysed: savedDeals.length,
     savedScenarios: savedDeals.length,
     vaultItems: vaultItems.length,
+    pipelineDeals: pipelineDeals.length,
+    portfolioProperties: portfolioProperties.length,
     bestRoi,
     bestCashflow,
     account,
     upgradeIntent,
     syncStatus: loadSyncStatus(),
     recentVaultItems: vaultItems.slice(0, 3),
+    recentPipelineDeals: pipelineDeals.slice(0, 3),
     recentDeals: savedDeals.slice(0, 3),
   };
 }
@@ -567,6 +641,16 @@ function getAirbnbHealthSummary(metrics) {
 function getSignatureVerdict(strategy, metrics, health) {
   const mainStrength = health.strengths[0] || 'The model has enough assumptions to support a structured first review.';
   const mainRisk = health.risks[0] || 'The key risk is still assumption quality: validate rent, costs, finance and market demand.';
+  const recommendations =
+    strategy === 'BRRR'
+      ? [
+          metrics.cashLeftInDeal > metrics.totalCashInvested * 0.45 ? 'Negotiate purchase price, improve GDV confidence or review LTV before relying on capital recycling.' : 'Validate the refinance valuation with local comparables and broker feedback.',
+          metrics.monthlyCashflow <= 0 ? 'Do not progress without improving rent, costs or finance terms.' : 'Stress-test rent and interest rate assumptions before offer stage.',
+        ]
+      : [
+          metrics.breakEvenOccupancy > 70 ? 'Validate occupancy with comparable listings before treating this as an investable SA opportunity.' : 'Check local regulation, cleaning logistics and management cost before comparing against BTL.',
+          metrics.monthlyDifference < 0 ? 'BTL may be a cleaner baseline unless nightly rate or occupancy can be improved.' : 'Review operational workload against the additional profit over BTL.',
+        ];
   const bestStrategy =
     strategy === 'BRRR'
       ? metrics.cashLeftInDeal <= metrics.totalCashInvested * 0.35
@@ -593,6 +677,19 @@ function getSignatureVerdict(strategy, metrics, health) {
           : 'BTL may be safer based on the current short-term rental assumptions.',
     mainStrength,
     mainRisk,
+    strengths: health.strengths.slice(0, 3),
+    risks: health.risks.slice(0, 3),
+    opportunities: health.opportunities.slice(0, 3),
+    benchmarkInsights: strategy === 'BRRR'
+      ? [
+          metrics.grossYield >= 6 ? 'Yield is within a more investable screening range for many UK BTL investors.' : 'Yield is below many UK BTL screening ranges and needs a stronger reason to progress.',
+          metrics.cashOnCashRoi >= 4 ? 'Cash-on-cash ROI is based on income rather than refinance uplift.' : 'Income return is modest relative to total cash deployed.',
+        ]
+      : [
+          metrics.airbnbYield >= 8 ? 'Airbnb yield appears strong, but only if occupancy is achievable.' : 'Airbnb yield is not yet strong enough to ignore the BTL baseline.',
+          metrics.breakEvenOccupancy <= 60 ? 'Break-even occupancy gives some operating buffer.' : 'The model depends on sustained occupancy and strong operations.',
+        ],
+    recommendations,
     bestStrategy,
     investorSuitability,
   };
@@ -739,6 +836,7 @@ function App() {
         <Route path="platform" element={<PlatformPage />} />
         <Route path="pricing" element={<PricingPage />} />
         <Route path="vault" element={<VaultPage />} />
+        <Route path="pipeline" element={<PipelinePage />} />
         <Route path="account" element={<AccountPage />} />
         <Route path="calculations" element={<CalculationsPage />} />
         <Route path="privacy" element={<PrivacyPage />} />
@@ -747,7 +845,7 @@ function App() {
         <Route path="contact" element={<ContactPage />} />
         <Route path="professional-tools" element={<ProfessionalToolsPage />} />
         <Route path="operating-system" element={<OperatingSystemPage />} />
-        <Route path="portfolio" element={<PortfolioBlueprintPage />} />
+        <Route path="portfolio" element={<PortfolioPage />} />
         <Route path="roadmap" element={<RoadmapPage />} />
         <Route path="*" element={<NotFoundPage />} />
       </Route>
@@ -993,10 +1091,19 @@ function DashboardPage() {
     },
     {
       title: 'Portfolio Tracker',
-      status: 'Pro Feature',
+      status: 'Active',
       copy: 'Save, compare and monitor your deal pipeline.',
-      action: 'Preview',
+      action: 'Open Portfolio',
       to: '/portfolio',
+      active: true,
+    },
+    {
+      title: 'Acquisition Pipeline',
+      status: 'Active',
+      copy: 'Move opportunities from lead to purchased.',
+      action: 'Open Pipeline',
+      to: '/pipeline',
+      active: true,
     },
   ];
 
@@ -1025,7 +1132,8 @@ function DashboardPage() {
           <SummaryCard label="Deals Analysed" value={String(stats.dealsAnalysed)} copy="Saved BRRR scenarios." />
           <SummaryCard label="Saved Deals" value={String(stats.savedScenarios)} copy="Local saved opportunities." />
           <SummaryCard label="Vault Items" value={String(stats.vaultItems)} copy="Notes, deals and scenarios." />
-          <SummaryCard label="Best ROI Found" value={stats.bestRoi > 0 ? formatPercent(stats.bestRoi) : 'No data'} copy="Best saved cash-on-cash ROI." />
+          <SummaryCard label="Pipeline" value={String(stats.pipelineDeals)} copy="Acquisition opportunities." />
+          <SummaryCard label="Portfolio" value={String(stats.portfolioProperties)} copy="Tracked properties." />
         </div>
       </section>
 
@@ -1039,7 +1147,8 @@ function DashboardPage() {
           <ChecklistItem done={Boolean(stats.account?.email)} title="Create account" copy="Save a local beta account email." />
           <ChecklistItem done={stats.dealsAnalysed > 0} title="Save first deal" copy="Use BRRR and save an opportunity." />
           <ChecklistItem done={stats.vaultItems > 0} title="Build Deal Vault" copy="Save a scenario or investor note." />
-          <ChecklistItem done={Boolean(stats.upgradeIntent)} title="Choose plan" copy="Register interest in Pro or Premium." />
+          <ChecklistItem done={stats.pipelineDeals > 0} title="Move to pipeline" copy="Progress one opportunity through stages." />
+          <ChecklistItem done={stats.portfolioProperties > 0} title="Add to portfolio" copy="Track a purchased or live property." />
         </div>
       </section>
 
@@ -1091,7 +1200,14 @@ function DashboardPage() {
             <Link className="panel-link" to="/vault">Open vault</Link>
           </DashboardPanel>
           <DashboardPanel title="Watchlist" meta="Future">
-            <EmptyLine text="Track target areas, vendors, agents and deals to revisit when pricing changes." />
+            {stats.recentPipelineDeals.length > 0 ? (
+              stats.recentPipelineDeals.map((deal) => (
+                <p key={deal.id}>{deal.title} · {deal.stage}</p>
+              ))
+            ) : (
+              <EmptyLine text="Pipeline opportunities will appear here when deals are moved forward." />
+            )}
+            <Link className="panel-link" to="/pipeline">Open pipeline</Link>
           </DashboardPanel>
           <DashboardPanel title="Account" meta={stats.account?.plan || 'Free'}>
             <EmptyLine text={stats.account?.email ? `${stats.account.email} is using the local beta workspace.` : 'Create a free local workspace from the homepage.'} />
@@ -1136,6 +1252,9 @@ function DashboardPage() {
 function BrrrAnalyzerPage() {
   const [inputs, setInputs] = useState(initialInputs);
   const [scenario, setScenario] = useState('expected');
+  const [activeTab, setActiveTab] = useState('overview');
+  const [dealName, setDealName] = useState(createDefaultDealName(initialInputs, 'BRRR'));
+  const [dealNote, setDealNote] = useState('');
   const [savedDeals, setSavedDeals] = useState(loadSavedDeals);
   const [vaultItems, setVaultItems] = useState(loadDealVault);
   const [noteDraft, setNoteDraft] = useState('');
@@ -1248,19 +1367,23 @@ function BrrrAnalyzerPage() {
       createdAt: new Date().toISOString(),
       route: '/brrr',
       scenario,
+      dealName,
     };
     saveVault([item, ...vaultItems]);
     setSaveMessage(`${title} added to Deal Vault`);
   }
 
   function saveCurrentDeal() {
+    const cleanName = dealName.trim() || createDefaultDealName(inputs, 'BRRR');
     const deal = {
       id: crypto.randomUUID(),
-      name: createDealName(inputs),
+      name: cleanName,
       createdAt: new Date().toISOString(),
       inputs: { ...inputs },
       metrics: { ...metrics },
       scenario,
+      notes: dealNote.trim(),
+      strategy: 'BRRR',
     };
 
     saveDeals([deal, ...savedDeals]);
@@ -1269,11 +1392,16 @@ function BrrrAnalyzerPage() {
         id: crypto.randomUUID(),
         type: 'Deal',
         title: deal.name,
-        copy: `${formatMoney(metrics.monthlyCashflow)} monthly cashflow · ${formatPercent(metrics.cashOnCashRoi)} cash-on-cash ROI`,
+        copy: deal.notes || `${formatMoney(metrics.monthlyCashflow)} monthly cashflow · ${formatPercent(metrics.cashOnCashRoi)} cash-on-cash ROI`,
         createdAt: deal.createdAt,
         route: '/brrr',
         scenario,
         dealId: deal.id,
+        name: deal.name,
+        notes: deal.notes,
+        inputs: deal.inputs,
+        metrics: deal.metrics,
+        strategy: 'BRRR',
       },
       ...vaultItems,
     ]);
@@ -1284,7 +1412,7 @@ function BrrrAnalyzerPage() {
   function saveScenario() {
     addVaultItem(
       'Scenario',
-      `${scenario[0].toUpperCase()}${scenario.slice(1)} BRRR scenario`,
+      `${dealName.trim() || createDefaultDealName(inputs, 'BRRR')} · ${scenario[0].toUpperCase()}${scenario.slice(1)}`,
       `${formatMoney(metrics.cashLeftInDeal)} left in deal · ${formatMoney(metrics.monthlyCashflow)} monthly cashflow`,
     );
   }
@@ -1307,7 +1435,7 @@ function BrrrAnalyzerPage() {
 
   function exportReport() {
     downloadTextFile(
-      `${createDealName(inputs).toLowerCase().replaceAll(' ', '-')}-report.txt`,
+      `${(dealName.trim() || createDefaultDealName(inputs, 'BRRR')).toLowerCase().replaceAll(' ', '-')}-report.txt`,
       createBrrrReport(inputs, metrics, signatureVerdict, strategyComparison),
     );
     setSaveMessage('Investment report exported');
@@ -1316,8 +1444,37 @@ function BrrrAnalyzerPage() {
   function loadDeal(deal) {
     setInputs(normalizeInputs(deal.inputs));
     setScenario(deal.scenario || deal.metrics?.scenario || 'expected');
+    setDealName(deal.name || createDefaultDealName(deal.inputs || inputs, 'BRRR'));
+    setDealNote(deal.notes || '');
     setActiveDealId(deal.id);
     setSaveMessage(`${deal.name} loaded`);
+  }
+
+  function renameDeal(dealId, nextName) {
+    const cleanName = nextName.trim();
+    if (!cleanName) return;
+    const nextDeals = savedDeals.map((deal) => (deal.id === dealId ? { ...deal, name: cleanName } : deal));
+    saveDeals(nextDeals);
+    saveVault(vaultItems.map((item) => (item.dealId === dealId ? { ...item, title: cleanName, name: cleanName } : item)));
+    if (activeDealId === dealId) setDealName(cleanName);
+  }
+
+  function addDealNote(dealId, note) {
+    const cleanNote = note.trim();
+    if (!cleanNote) return;
+    saveDeals(savedDeals.map((deal) => (deal.id === dealId ? { ...deal, notes: cleanNote } : deal)));
+    const deal = savedDeals.find((item) => item.id === dealId);
+    if (deal) addVaultItem('Note', `${deal.name} note`, cleanNote);
+  }
+
+  function moveSavedDealToPipeline(deal) {
+    addDealToPipeline(deal, 'Analysing');
+    setSaveMessage(`${deal.name} moved to pipeline`);
+  }
+
+  function moveSavedDealToPortfolio(deal) {
+    addDealToPortfolio(deal);
+    setSaveMessage(`${deal.name} added to portfolio`);
   }
 
   function deleteDeal(dealId) {
@@ -1365,74 +1522,98 @@ function BrrrAnalyzerPage() {
       <section className="analyzer-grid">
         <div className="panel input-panel">
           <PanelHeading label="Inputs" title="Deal Assumptions" meta={activeDealId ? 'Saved deal loaded' : 'Unsaved scenario'} />
+          <DealIdentityForm dealName={dealName} setDealName={setDealName} dealNote={dealNote} setDealNote={setDealNote} />
           <ScenarioToggle scenario={scenario} setScenario={setScenario} />
           <InputSections groupedFields={groupedFields} inputs={inputs} updateInput={updateInput} />
         </div>
 
-        <div className="panel results-panel">
-          <PanelHeading label="Analysis" title="Underwriting Summary" meta={metrics.rating.label} />
-          <div className={`rating-card ${metrics.rating.tone}`}>
-            <span>Deal summary</span>
-            <strong>{metrics.rating.label}</strong>
-            <p>{metrics.verdict}</p>
-          </div>
+        <div className="panel analysis-workspace">
+          <PanelHeading label="Analysis" title="Decision Workspace" meta={metrics.rating.label} />
+          <AnalysisTabs activeTab={activeTab} setActiveTab={setActiveTab} />
 
-          <div className="metric-list">
-            <Result label="Total Cash Invested" value={formatMoney(metrics.totalCashInvested)} />
-            <Result label="Refinance Loan Estimate" value={formatMoney(metrics.refinanceLoan)} />
-            <Result label="Cash Left in Deal" value={formatMoney(metrics.cashLeftInDeal)} highlight />
-            <Result label="Monthly Mortgage Payment" value={formatMoney(metrics.monthlyMortgage)} />
-            <Result label="Monthly Cashflow" value={formatMoney(metrics.monthlyCashflow)} highlight />
-            <Result label="Annual Cashflow" value={formatMoney(metrics.annualCashflow)} />
-            <Result label="Gross Yield" value={formatPercent(metrics.grossYield)} note="Property performance based on gross rent and purchase price." />
-            <Result label="Net Yield" value={formatPercent(metrics.netYield)} note="Annual cashflow relative to total cash invested." />
-            <Result label="Cash-on-Cash ROI" value={formatPercent(metrics.cashOnCashRoi)} note="Annual cashflow compared with total cash invested." highlight />
-            <Result label="Break-even Rent" value={formatMoney(metrics.breakEvenRent)} note="Rent required to cover mortgage, void allowance and running costs." />
-            <Result label="Break-even Refinance Value" value={formatMoney(metrics.breakEvenRefinanceValue)} note="Estimated ARV needed to refinance all invested cash." />
-            <Result label="Break-even Interest Rate" value={formatPercent(metrics.breakEvenInterestRate)} note="Approximate rate where monthly cashflow reaches zero." />
-          </div>
-        </div>
+          {activeTab === 'overview' && (
+            <div className="tab-panel">
+              <div className={`rating-card ${metrics.rating.tone}`}>
+                <span>Deal summary</span>
+                <strong>{metrics.rating.label}</strong>
+                <p>{metrics.verdict}</p>
+              </div>
+              <div className="metric-list compact">
+                <Result label="Total Cash Invested" value={formatMoney(metrics.totalCashInvested)} />
+                <Result label="Refinance Loan Estimate" value={formatMoney(metrics.refinanceLoan)} />
+                <Result label="Cash Left in Deal" value={formatMoney(metrics.cashLeftInDeal)} highlight />
+                <Result label="Monthly Mortgage Payment" value={formatMoney(metrics.monthlyMortgage)} />
+                <Result label="Monthly Cashflow" value={formatMoney(metrics.monthlyCashflow)} highlight />
+                <Result label="Annual Cashflow" value={formatMoney(metrics.annualCashflow)} />
+                <Result label="Gross Yield" value={formatPercent(metrics.grossYield)} note="Property performance based on gross rent and purchase price." />
+                <Result label="Net Yield" value={formatPercent(metrics.netYield)} note="Annual cashflow relative to total cash invested." />
+                <Result label="Cash-on-Cash ROI" value={formatPercent(metrics.cashOnCashRoi)} note="Annual cashflow compared with total cash invested." highlight />
+              </div>
+            </div>
+          )}
 
-        <div className="side-stack">
-          <AIVerdictPanel verdict={signatureVerdict} />
-          <StrategyComparisonPanel comparison={strategyComparison} />
-          <DecisionPanel health={health} healthSummary={metrics.healthSummary} verdict={metrics.verdict} benchmarks={benchmarks} insights={insightCards} />
-          <div className="panel">
-            <PanelHeading label="Sensitivity" title="Stress Test" meta="Live" />
-            <MiniTable title="Interest rate sensitivity" rows={metrics.interestSensitivity} />
-            <MiniTable title="Rent sensitivity" rows={metrics.rentSensitivity} />
-            <MiniTable title="GDV sensitivity" rows={metrics.gdvSensitivity} />
-          </div>
-          <div className="panel assumptions-panel">
-            <PanelHeading label="Transparency" title="Assumptions" meta="Estimate" />
-            <ul>
-              <li>Rent, GDV/ARV, refurb cost and lending terms should be independently verified.</li>
-              <li>Stamp duty is an estimate unless you enter your own figure.</li>
-              <li>Running costs and void allowance are included to avoid marketing-style ROI claims.</li>
-              <li>This is an underwriting aid, not financial, tax or mortgage advice.</li>
-            </ul>
-          </div>
+          {activeTab === 'verdict' && (
+            <div className="tab-panel">
+              <AIVerdictPanel verdict={signatureVerdict} />
+              <DecisionPanel health={health} healthSummary={metrics.healthSummary} verdict={metrics.verdict} benchmarks={benchmarks} insights={insightCards} />
+            </div>
+          )}
 
-          <div className="panel saved-panel">
-            <PanelHeading label="Vault" title="Deal Vault" meta={`${vaultItems.length} items`} />
-            <DealVaultPanel
-              vaultItems={vaultItems}
-              saveScenario={saveScenario}
-              noteDraft={noteDraft}
-              setNoteDraft={setNoteDraft}
-              addNote={addNote}
-              deleteVaultItem={deleteVaultItem}
-              exportVault={exportVault}
-            />
-            <PanelHeading label="Portfolio" title="Saved Deals" meta={`${savedDeals.length} saved`} />
-            <SaveCompareFramework />
-            <SavedDealsList
-              savedDeals={savedDeals}
-              activeDealId={activeDealId}
-              loadDeal={loadDeal}
-              deleteDeal={deleteDeal}
-            />
-          </div>
+          {activeTab === 'sensitivity' && (
+            <div className="tab-panel">
+              <MiniTable title="Interest rate sensitivity" rows={metrics.interestSensitivity} />
+              <MiniTable title="Rent sensitivity" rows={metrics.rentSensitivity} />
+              <MiniTable title="GDV sensitivity" rows={metrics.gdvSensitivity} />
+              <MiniTable
+                title="Break-even analysis"
+                rows={[
+                  { label: 'Break-even rent', value: formatMoney(metrics.breakEvenRent) },
+                  { label: 'Break-even refinance value', value: formatMoney(metrics.breakEvenRefinanceValue) },
+                  { label: 'Break-even interest rate', value: formatPercent(metrics.breakEvenInterestRate) },
+                ]}
+              />
+            </div>
+          )}
+
+          {activeTab === 'comparison' && (
+            <div className="tab-panel">
+              <StrategyComparisonPanel comparison={strategyComparison} />
+              <div className="panel assumptions-panel nested-panel">
+                <PanelHeading label="Transparency" title="Assumptions" meta="Estimate" />
+                <ul>
+                  <li>Rent, GDV/ARV, refurb cost and lending terms should be independently verified.</li>
+                  <li>Stamp duty is an estimate unless you enter your own figure.</li>
+                  <li>Running costs and void allowance are included to avoid marketing-style ROI claims.</li>
+                  <li>This is an underwriting aid, not financial, tax or mortgage advice.</li>
+                </ul>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'saved' && (
+            <div className="tab-panel">
+              <DealVaultPanel
+                vaultItems={vaultItems}
+                saveScenario={saveScenario}
+                noteDraft={noteDraft}
+                setNoteDraft={setNoteDraft}
+                addNote={addNote}
+                deleteVaultItem={deleteVaultItem}
+                exportVault={exportVault}
+              />
+              <SaveCompareFramework />
+              <SavedDealsList
+                savedDeals={savedDeals}
+                activeDealId={activeDealId}
+                loadDeal={loadDeal}
+                deleteDeal={deleteDeal}
+                renameDeal={renameDeal}
+                addDealNote={addDealNote}
+                moveToPipeline={moveSavedDealToPipeline}
+                moveToPortfolio={moveSavedDealToPortfolio}
+              />
+            </div>
+          )}
         </div>
       </section>
     </main>
@@ -1442,6 +1623,7 @@ function BrrrAnalyzerPage() {
 function AirbnbAnalyzerPage() {
   const [inputs, setInputs] = useState(initialAirbnbInputs);
   const [scenario, setScenario] = useState('expected');
+  const [activeTab, setActiveTab] = useState('overview');
 
   function updateInput(name, value) {
     setInputs((currentInputs) => ({ ...currentInputs, [name]: value }));
@@ -1555,60 +1737,78 @@ function AirbnbAnalyzerPage() {
         <SummaryCard label="BTL Comparison" value={formatMoney(metrics.monthlyDifference)} copy="Difference versus long-term rental profit." />
       </section>
 
-      <section className="analyzer-grid two-column">
+      <section className="analyzer-grid">
         <div className="panel input-panel">
           <PanelHeading label="Inputs" title="Serviced Accommodation Assumptions" meta="Early access" />
           <ScenarioToggle scenario={scenario} setScenario={setScenario} />
           <InputSections groupedFields={groupFields(airbnbFields)} inputs={inputs} updateInput={updateInput} />
         </div>
 
-        <div className="panel results-panel">
-          <PanelHeading label="Analysis" title="Airbnb vs BTL Summary" meta="Estimate" />
-          <div className={metrics.monthlyDifference >= 0 ? 'rating-card strong' : 'rating-card borderline'}>
-            <span>Strategy comparison</span>
-            <strong>{metrics.monthlyDifference >= 0 ? 'Airbnb leads' : 'BTL may be safer'}</strong>
-            <p>{metrics.comparison} Results depend heavily on occupancy, nightly rate and operating costs.</p>
-          </div>
+        <div className="panel analysis-workspace">
+          <PanelHeading label="Analysis" title="Airbnb Decision Workspace" meta="Estimate" />
+          <AnalysisTabs activeTab={activeTab} setActiveTab={setActiveTab} hideSaved />
 
-          <div className="metric-list">
-            <Result label="Estimated Gross Monthly Airbnb Revenue" value={formatMoney(metrics.grossMonthlyRevenue)} highlight />
-            <Result label="Estimated Operating Costs" value={formatMoney(metrics.operatingCosts)} />
-            <Result label="Estimated Monthly Profit" value={formatMoney(metrics.monthlyProfit)} highlight />
-            <Result label="Estimated Annual Profit" value={formatMoney(metrics.annualProfit)} />
-            <Result label="Airbnb Yield" value={formatPercent(metrics.airbnbYield)} />
-            <Result label="Payback Period on Setup Cost" value={formatMonths(metrics.paybackMonths)} />
-            <Result label="Long-Term Rental Profit" value={formatMoney(metrics.btlProfit)} />
-            <Result label="Difference in Monthly Profit" value={formatMoney(metrics.monthlyDifference)} />
-            <Result label="Break-even Occupancy" value={formatPercent(metrics.breakEvenOccupancy)} />
-            <Result label="Break-even Nightly Rate" value={formatMoney(metrics.breakEvenNightlyRate)} />
-            <Result label="Break-even Monthly Revenue" value={formatMoney(metrics.breakEvenMonthlyRevenue)} />
-          </div>
+          {activeTab === 'overview' && (
+            <div className="tab-panel">
+              <div className={metrics.monthlyDifference >= 0 ? 'rating-card strong' : 'rating-card borderline'}>
+                <span>Strategy comparison</span>
+                <strong>{metrics.monthlyDifference >= 0 ? 'Airbnb leads' : 'BTL may be safer'}</strong>
+                <p>{metrics.comparison} Results depend heavily on occupancy, nightly rate and operating costs.</p>
+              </div>
+              <div className="metric-list compact">
+                <Result label="Estimated Gross Monthly Airbnb Revenue" value={formatMoney(metrics.grossMonthlyRevenue)} highlight />
+                <Result label="Estimated Operating Costs" value={formatMoney(metrics.operatingCosts)} />
+                <Result label="Estimated Monthly Profit" value={formatMoney(metrics.monthlyProfit)} highlight />
+                <Result label="Estimated Annual Profit" value={formatMoney(metrics.annualProfit)} />
+                <Result label="Airbnb Yield" value={formatPercent(metrics.airbnbYield)} />
+                <Result label="Payback Period on Setup Cost" value={formatMonths(metrics.paybackMonths)} />
+                <Result label="Long-Term Rental Profit" value={formatMoney(metrics.btlProfit)} />
+                <Result label="Difference in Monthly Profit" value={formatMoney(metrics.monthlyDifference)} />
+              </div>
+            </div>
+          )}
 
-          <div className="assumption-note">
-            <strong>Assumption note</strong>
-            <p>Short-term rental returns are sensitive to occupancy, regulation, seasonality, cleaning costs and management quality. Treat this as an early comparison, not a forecast.</p>
-          </div>
-        </div>
+          {activeTab === 'verdict' && (
+            <div className="tab-panel">
+              <AIVerdictPanel verdict={signatureVerdict} />
+              <DecisionPanel
+                health={health}
+                healthSummary={metrics.healthSummary}
+                verdict={metrics.comparison}
+                benchmarks={[
+                  'Short-term rental performance depends heavily on local demand, regulation and operational standards.',
+                  metrics.monthlyDifference >= 0
+                    ? 'The Airbnb scenario outperforms the BTL baseline on profit, before considering extra workload and volatility.'
+                    : 'The BTL baseline currently offers a stronger or safer monthly position.',
+                ]}
+                insights={insights}
+              />
+            </div>
+          )}
 
-        <div className="side-stack">
-          <AIVerdictPanel verdict={signatureVerdict} />
-          <StrategyComparisonPanel comparison={strategyComparison} />
-          <DecisionPanel
-            health={health}
-            healthSummary={metrics.healthSummary}
-            verdict={metrics.comparison}
-            benchmarks={[
-              'Short-term rental performance depends heavily on local demand, regulation and operational standards.',
-              metrics.monthlyDifference >= 0
-                ? 'The Airbnb scenario outperforms the BTL baseline on profit, before considering extra workload and volatility.'
-                : 'The BTL baseline currently offers a stronger or safer monthly position.',
-            ]}
-            insights={insights}
-          />
-          <div className="panel">
-            <PanelHeading label="Sensitivity" title="Occupancy Stress Test" meta="Profit" />
-            <MiniTable title="Monthly profit by occupancy" rows={metrics.occupancySensitivity} />
-          </div>
+          {activeTab === 'sensitivity' && (
+            <div className="tab-panel">
+              <MiniTable title="Monthly profit by occupancy" rows={metrics.occupancySensitivity} />
+              <MiniTable
+                title="Break-even analysis"
+                rows={[
+                  { label: 'Break-even occupancy', value: formatPercent(metrics.breakEvenOccupancy) },
+                  { label: 'Break-even nightly rate', value: formatMoney(metrics.breakEvenNightlyRate) },
+                  { label: 'Break-even monthly revenue', value: formatMoney(metrics.breakEvenMonthlyRevenue) },
+                ]}
+              />
+            </div>
+          )}
+
+          {activeTab === 'comparison' && (
+            <div className="tab-panel">
+              <StrategyComparisonPanel comparison={strategyComparison} />
+              <div className="assumption-note">
+                <strong>Assumption note</strong>
+                <p>Short-term rental returns are sensitive to occupancy, regulation, seasonality, cleaning costs and management quality. Treat this as an early comparison, not a forecast.</p>
+              </div>
+            </div>
+          )}
         </div>
       </section>
     </main>
@@ -1690,7 +1890,6 @@ function PlatformPage() {
           <PremiumPreview title="Deal Vault" copy="Store the evidence behind each decision: assumptions, notes, scenarios and reports." />
           <PremiumPreview title="Investor CRM" copy="Track brokers, agents, sourcers, lenders and partners around each opportunity." />
           <PremiumPreview title="Marketplace Access" copy="Prepare for trusted services that support diligence, finance and operations." />
-          <PremiumPreview title="Team Collaboration" copy="Future workspaces for partners, analysts and portfolio teams." />
         </div>
       </section>
 
@@ -1736,7 +1935,7 @@ function PricingPage() {
       price: '£29/mo',
       badge: 'Future',
       copy: 'For portfolio builders who need workflow, pipeline and reporting tools.',
-      items: ['Portfolio tracker', 'Deal pipeline', 'Growth forecasting', 'Investor CRM', 'Team workspace roadmap'],
+      items: ['Portfolio tracker', 'Deal pipeline', 'Growth forecasting', 'Investor CRM', 'Advanced reporting roadmap'],
     },
   ];
 
@@ -1801,6 +2000,7 @@ function PricingPage() {
 
 function VaultPage() {
   const [vaultItems, setVaultItems] = useState(loadDealVault);
+  const [message, setMessage] = useState('');
 
   function saveVault(nextVaultItems) {
     setVaultItems(nextVaultItems);
@@ -1813,6 +2013,16 @@ function VaultPage() {
 
   function exportVault() {
     downloadTextFile('acquiraiq-deal-vault.json', JSON.stringify(vaultItems, null, 2), 'application/json');
+  }
+
+  function moveVaultItemToPipeline(item) {
+    addDealToPipeline(item, 'Analysing');
+    setMessage(`${item.title} moved to pipeline`);
+  }
+
+  function moveVaultItemToPortfolio(item) {
+    addDealToPortfolio(item);
+    setMessage(`${item.title} added to portfolio`);
   }
 
   return (
@@ -1828,6 +2038,7 @@ function VaultPage() {
           <p className="eyebrow">Local vault</p>
           <h2>{vaultItems.length} saved items</h2>
           <p>Export your vault before clearing browser data. Cloud sync should be the next backend milestone.</p>
+          {message && <p className="status-message">{message}</p>}
         </div>
         <div className="hero-actions">
           <button className="primary-btn" type="button" onClick={exportVault}>Export Vault</button>
@@ -1849,7 +2060,11 @@ function VaultPage() {
               <p>{item.copy}</p>
               <div className="vault-record-footer">
                 <small>{formatShortDate(new Date(item.createdAt))} · {item.scenario || 'saved'}</small>
-                <button className="inline-danger" type="button" onClick={() => deleteVaultItem(item.id)}>Delete</button>
+                <div className="inline-action-row">
+                  <button className="inline-action" type="button" onClick={() => moveVaultItemToPipeline(item)}>Pipeline</button>
+                  <button className="inline-action" type="button" onClick={() => moveVaultItemToPortfolio(item)}>Portfolio</button>
+                  <button className="inline-danger" type="button" onClick={() => deleteVaultItem(item.id)}>Delete</button>
+                </div>
               </div>
             </article>
           ))}
@@ -1896,6 +2111,8 @@ function AccountPage() {
   function clearLocalWorkspace() {
     localStorage.removeItem(STORAGE_KEY);
     localStorage.removeItem(VAULT_STORAGE_KEY);
+    localStorage.removeItem(PIPELINE_STORAGE_KEY);
+    localStorage.removeItem(PORTFOLIO_STORAGE_KEY);
     localStorage.removeItem(UPGRADE_STORAGE_KEY);
     localStorage.removeItem(SYNC_STATUS_STORAGE_KEY);
     setSyncStatus(null);
@@ -2099,26 +2316,187 @@ function OperatingSystemPage() {
   );
 }
 
-function PortfolioBlueprintPage() {
-  const sections = [
-    { title: 'Properties', copy: 'No properties added yet. Future portfolio records will appear here.' },
-    { title: 'Monthly Cashflow', copy: 'Aggregate portfolio income and costs will be summarised here.' },
-    { title: 'Equity Estimate', copy: 'Track estimated equity based on valuations and outstanding debt.' },
-    { title: 'Portfolio Yield', copy: 'Review income performance across the whole portfolio.' },
-    { title: 'Acquisition Pipeline', copy: 'Monitor potential acquisitions from first review to completion.' },
-  ];
+function PortfolioPage() {
+  const [properties, setProperties] = useState(loadPortfolioProperties);
+  const [form, setForm] = useState({
+    name: '',
+    purchasePrice: '',
+    currentValue: '',
+    monthlyRent: '',
+    mortgageBalance: '',
+  });
+
+  function updateForm(name, value) {
+    setForm((current) => ({ ...current, [name]: value }));
+  }
+
+  function saveProperties(nextProperties) {
+    setProperties(nextProperties);
+    savePortfolioProperties(nextProperties);
+  }
+
+  function addProperty() {
+    const propertyName = form.name.trim();
+    if (!propertyName) return;
+    const property = {
+      id: crypto.randomUUID(),
+      name: propertyName,
+      purchasePrice: toNumber(form.purchasePrice),
+      currentValue: toNumber(form.currentValue),
+      monthlyRent: toNumber(form.monthlyRent),
+      mortgageBalance: toNumber(form.mortgageBalance),
+      createdAt: new Date().toISOString(),
+    };
+    saveProperties([property, ...properties]);
+    setForm({ name: '', purchasePrice: '', currentValue: '', monthlyRent: '', mortgageBalance: '' });
+  }
+
+  function deleteProperty(propertyId) {
+    saveProperties(properties.filter((property) => property.id !== propertyId));
+  }
+
+  const totals = properties.reduce(
+    (summary, property) => ({
+      value: summary.value + toNumber(property.currentValue),
+      rent: summary.rent + toNumber(property.monthlyRent),
+      equity: summary.equity + Math.max(toNumber(property.currentValue) - toNumber(property.mortgageBalance), 0),
+    }),
+    { value: 0, rent: 0, equity: 0 },
+  );
 
   return (
-    <main className="page roadmap-page">
+    <main className="page portfolio-page">
       <section className="page-hero compact">
-        <p className="eyebrow">Premium blueprint</p>
+        <p className="eyebrow">Portfolio</p>
         <h1>Portfolio Tracker</h1>
-        <p>A future workspace for monitoring live assets, acquisition pipeline and portfolio-level performance.</p>
+        <p>Track live or purchased properties with value, rent, debt and equity in one local workspace.</p>
       </section>
 
-      <section className="module-grid">
-        {sections.map((section) => (
-          <RoadmapCard key={section.title} title={section.title} badge="Premium Placeholder" copy={section.copy} />
+      <section className="summary-strip">
+        <SummaryCard label="Total Portfolio Value" value={formatMoney(totals.value)} copy="Current estimated value across tracked properties." />
+        <SummaryCard label="Total Monthly Rent" value={formatMoney(totals.rent)} copy="Gross rent across tracked properties." />
+        <SummaryCard label="Estimated Equity" value={formatMoney(totals.equity)} copy="Current value less mortgage balance." />
+      </section>
+
+      <section className="workspace-layout">
+        <div className="panel">
+          <PanelHeading label="Add property" title="Property Details" meta="Local" />
+          <label className="note-entry"><span>Name / address</span><input value={form.name} onChange={(event) => updateForm('name', event.target.value)} placeholder="12 High Street, Birmingham" /></label>
+          <label className="note-entry"><span>Purchase price</span><input type="number" value={form.purchasePrice} onChange={(event) => updateForm('purchasePrice', event.target.value)} /></label>
+          <label className="note-entry"><span>Current value</span><input type="number" value={form.currentValue} onChange={(event) => updateForm('currentValue', event.target.value)} /></label>
+          <label className="note-entry"><span>Monthly rent</span><input type="number" value={form.monthlyRent} onChange={(event) => updateForm('monthlyRent', event.target.value)} /></label>
+          <label className="note-entry"><span>Mortgage balance</span><input type="number" value={form.mortgageBalance} onChange={(event) => updateForm('mortgageBalance', event.target.value)} /></label>
+          <button className="primary-btn" type="button" onClick={addProperty}>Add Property</button>
+        </div>
+
+        <div className="panel">
+          <PanelHeading label="Tracked properties" title="Portfolio" meta={`${properties.length} properties`} />
+          {properties.length === 0 ? (
+            <div className="empty-state">
+              <strong>No properties tracked yet</strong>
+              <p>Add a property manually or move a saved deal into the portfolio from the Deal Vault.</p>
+            </div>
+          ) : (
+            <div className="vault-list">
+              {properties.map((property) => (
+                <article className="vault-record" key={property.id}>
+                  <span>Property</span>
+                  <strong>{property.name}</strong>
+                  <p>{formatMoney(property.currentValue)} value · {formatMoney(property.monthlyRent)} monthly rent · {formatMoney(Math.max(property.currentValue - property.mortgageBalance, 0))} equity</p>
+                  <div className="vault-record-footer">
+                    <small>{formatMoney(property.purchasePrice)} purchase price</small>
+                    <button className="inline-danger" type="button" onClick={() => deleteProperty(property.id)}>Delete</button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
+    </main>
+  );
+}
+
+function PipelinePage() {
+  const stages = ['Lead', 'Analysing', 'Offered', 'Under Offer', 'Purchased'];
+  const [pipelineDeals, setPipelineDeals] = useState(loadPipelineDeals);
+  const [title, setTitle] = useState('');
+
+  function savePipeline(nextDeals) {
+    setPipelineDeals(nextDeals);
+    savePipelineDeals(nextDeals);
+  }
+
+  function addPipelineDeal() {
+    const cleanTitle = title.trim();
+    if (!cleanTitle) return;
+    savePipeline([{ id: crypto.randomUUID(), title: cleanTitle, stage: 'Lead', strategy: 'Manual', updatedAt: new Date().toISOString() }, ...pipelineDeals]);
+    setTitle('');
+  }
+
+  function updateStage(dealId, stage) {
+    savePipeline(pipelineDeals.map((deal) => (deal.id === dealId ? { ...deal, stage, updatedAt: new Date().toISOString() } : deal)));
+  }
+
+  function deletePipelineDeal(dealId) {
+    savePipeline(pipelineDeals.filter((deal) => deal.id !== dealId));
+  }
+
+  function movePipelineDealToPortfolio(deal) {
+    addDealToPortfolio({
+      id: deal.sourceDealId || deal.id,
+      name: deal.title,
+      metrics: { refinanceLoan: 0 },
+      inputs: {},
+    });
+    updateStage(deal.id, 'Purchased');
+  }
+
+  return (
+    <main className="page pipeline-page">
+      <section className="page-hero compact">
+        <p className="eyebrow">Acquisition Pipeline</p>
+        <h1>Move deals from lead to purchased</h1>
+        <p>Track opportunities through the investor workflow: Analyse Deal, Save Deal, Move To Pipeline, Add To Portfolio.</p>
+      </section>
+
+      <section className="upgrade-strip glass-card">
+        <div>
+          <p className="eyebrow">Add lead</p>
+          <h2>Capture an opportunity quickly</h2>
+          <p>Saved analyzer deals can also be moved here from the BRRR module or Deal Vault.</p>
+        </div>
+        <div className="hero-actions">
+          <input className="pipeline-input" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Liverpool Airbnb Opportunity" />
+          <button className="primary-btn" type="button" onClick={addPipelineDeal}>Add Lead</button>
+        </div>
+      </section>
+
+      <section className="pipeline-board">
+        {stages.map((stage) => (
+          <div className="pipeline-column panel" key={stage}>
+            <PanelHeading label="Stage" title={stage} meta={`${pipelineDeals.filter((deal) => deal.stage === stage).length}`} />
+            <div className="vault-list">
+              {pipelineDeals.filter((deal) => deal.stage === stage).map((deal) => (
+                <article className="vault-record" key={deal.id}>
+                  <span>{deal.strategy || 'Deal'}</span>
+                  <strong>{deal.title}</strong>
+                  <p>{deal.monthlyProfit === null || deal.monthlyProfit === undefined ? 'No profit model attached yet.' : `${formatMoney(deal.monthlyProfit)} monthly profit`}</p>
+                  <select className="stage-select" value={deal.stage} onChange={(event) => updateStage(deal.id, event.target.value)}>
+                    {stages.map((option) => <option value={option} key={option}>{option}</option>)}
+                  </select>
+                  <div className="vault-record-footer">
+                    <button className="inline-danger" type="button" onClick={() => deletePipelineDeal(deal.id)}>Delete</button>
+                    {deal.stage === 'Purchased' ? (
+                      <button className="inline-action" type="button" onClick={() => movePipelineDealToPortfolio(deal)}>Add to portfolio</button>
+                    ) : (
+                      <small>{formatShortDate(new Date(deal.updatedAt))}</small>
+                    )}
+                  </div>
+                </article>
+              ))}
+            </div>
+          </div>
         ))}
       </section>
     </main>
@@ -2173,6 +2551,55 @@ function InputSections({ groupedFields, inputs, updateInput }) {
   ));
 }
 
+function DealIdentityForm({ dealName, setDealName, dealNote, setDealNote }) {
+  return (
+    <div className="deal-identity">
+      <label className="note-entry">
+        <span>Deal name</span>
+        <input
+          value={dealName}
+          onChange={(event) => setDealName(event.target.value)}
+          placeholder="12 High Street, Birmingham"
+        />
+      </label>
+      <label className="note-entry">
+        <span>Deal notes</span>
+        <textarea
+          value={dealNote}
+          onChange={(event) => setDealNote(event.target.value)}
+          placeholder="Add source, viewing notes, assumptions or broker feedback."
+          rows="3"
+        />
+      </label>
+    </div>
+  );
+}
+
+function AnalysisTabs({ activeTab, setActiveTab, hideSaved = false }) {
+  const tabs = [
+    ['overview', 'Overview'],
+    ['verdict', 'Investor Verdict'],
+    ['sensitivity', 'Sensitivity'],
+    ['comparison', 'Comparison'],
+    ['saved', 'Saved Deal'],
+  ].filter(([key]) => !(hideSaved && key === 'saved'));
+
+  return (
+    <div className="analysis-tabs" role="tablist" aria-label="Analysis sections">
+      {tabs.map(([key, label]) => (
+        <button
+          className={activeTab === key ? 'analysis-tab active' : 'analysis-tab'}
+          type="button"
+          key={key}
+          onClick={() => setActiveTab(key)}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function ScenarioToggle({ scenario, setScenario }) {
   return (
     <div className="scenario-toggle" aria-label="Scenario selector">
@@ -2215,6 +2642,13 @@ function AIVerdictPanel({ verdict }) {
           <span>Investor Suitability</span>
           <p>{verdict.investorSuitability}</p>
         </div>
+      </div>
+      <div className="verdict-sections">
+        <HealthColumn title="Strengths" items={verdict.strengths || []} empty="No clear strengths identified yet." />
+        <HealthColumn title="Risks" items={verdict.risks || []} empty="No major risks flagged from current inputs." />
+        <HealthColumn title="Opportunities" items={verdict.opportunities || []} empty="No opportunities flagged yet." />
+        <HealthColumn title="Benchmark Insights" items={verdict.benchmarkInsights || []} empty="Add more assumptions to unlock benchmarks." />
+        <HealthColumn title="Recommendations" items={verdict.recommendations || []} empty="No recommendations available yet." />
       </div>
     </div>
   );
@@ -2347,14 +2781,14 @@ function RoadmapBlock() {
   return (
     <section className="roadmap-block glass-card">
       <SectionHeading
-        label="Roadmap"
-        title="Now, next and future"
-        copy="A transparent path from active calculators to a full property investment operating system."
+        label="Workflow"
+        title="Investor workflow"
+        copy="AcquiraIQ connects analysis, saved evidence, acquisition stages and portfolio tracking in one operating system."
       />
       <div className="roadmap-columns">
-        <RoadmapColumn title="Now" items={['BRRR Analyzer', 'Airbnb Analyzer', 'Saved deals', 'Scenario testing']} />
-        <RoadmapColumn title="Next" items={['Strategy Comparison', 'AI Verdict', 'Deal Vault', 'PDF Reports']} />
-        <RoadmapColumn title="Future" items={['Portfolio Tracker', 'Marketplace', 'CRM', 'Growth Forecasting']} />
+        <RoadmapColumn title="Analyse Deal" items={['BRRR Analyzer', 'Airbnb Analyzer', 'Investor Verdict', 'Sensitivity testing']} />
+        <RoadmapColumn title="Manage Opportunity" items={['Named saved deals', 'Deal Vault', 'Acquisition Pipeline', 'Notes and scenarios']} />
+        <RoadmapColumn title="Track Portfolio" items={['Portfolio Tracker', 'Equity estimate', 'Total rent', 'Property records']} />
       </div>
     </section>
   );
@@ -2467,7 +2901,7 @@ function DealVaultPanel({ vaultItems, saveScenario, noteDraft, setNoteDraft, add
   );
 }
 
-function SavedDealsList({ savedDeals, activeDealId, loadDeal, deleteDeal }) {
+function SavedDealsList({ savedDeals, activeDealId, loadDeal, deleteDeal, renameDeal, addDealNote, moveToPipeline, moveToPortfolio }) {
   if (savedDeals.length === 0) {
     return (
       <div className="empty-state">
@@ -2484,10 +2918,48 @@ function SavedDealsList({ savedDeals, activeDealId, loadDeal, deleteDeal }) {
         const rating = savedMetrics.rating;
 
         return (
-          <article className={deal.id === activeDealId ? 'saved-deal active' : 'saved-deal'} key={deal.id}>
+          <SavedDealCard
+            key={deal.id}
+            deal={deal}
+            active={deal.id === activeDealId}
+            savedMetrics={savedMetrics}
+            rating={rating}
+            loadDeal={loadDeal}
+            deleteDeal={deleteDeal}
+            renameDeal={renameDeal}
+            addDealNote={addDealNote}
+            moveToPipeline={moveToPipeline}
+            moveToPortfolio={moveToPortfolio}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+function SavedDealCard({ deal, active, savedMetrics, rating, loadDeal, deleteDeal, renameDeal, addDealNote, moveToPipeline, moveToPortfolio }) {
+  const [editing, setEditing] = useState(false);
+  const [nameDraft, setNameDraft] = useState(deal.name || '');
+  const [noteDraft, setNoteDraft] = useState(deal.notes || '');
+
+  function saveRename() {
+    renameDeal?.(deal.id, nameDraft);
+    setEditing(false);
+  }
+
+  function saveNote() {
+    addDealNote?.(deal.id, noteDraft);
+  }
+
+  return (
+    <article className={active ? 'saved-deal active' : 'saved-deal'}>
             <div className="saved-main">
               <div>
-                <h3>{deal.name}</h3>
+          {editing ? (
+            <input className="inline-edit" value={nameDraft} onChange={(event) => setNameDraft(event.target.value)} />
+          ) : (
+            <h3>{deal.name}</h3>
+          )}
                 <p>{formatMoney(toNumber(deal.inputs.purchasePrice))} purchase price</p>
               </div>
               <div className={`saved-rating ${rating.tone}`}>{rating.label}</div>
@@ -2504,18 +2976,44 @@ function SavedDealsList({ savedDeals, activeDealId, loadDeal, deleteDeal }) {
               </span>
             </div>
 
+      {deal.notes && <p className="saved-note">{deal.notes}</p>}
+
+      {editing && (
+        <label className="note-entry">
+          <span>Deal note</span>
+          <textarea value={noteDraft} onChange={(event) => setNoteDraft(event.target.value)} rows="3" />
+        </label>
+      )}
+
             <div className="saved-actions">
               <button className="secondary-btn" type="button" onClick={() => loadDeal(deal)}>
                 Load
               </button>
+        {editing ? (
+          <button className="secondary-btn" type="button" onClick={saveRename}>
+            Save Name
+          </button>
+        ) : (
+          <button className="secondary-btn" type="button" onClick={() => setEditing(true)}>
+            Rename
+          </button>
+        )}
+        <button className="secondary-btn" type="button" onClick={() => moveToPipeline?.(deal)}>
+          Move To Pipeline
+        </button>
+        <button className="secondary-btn" type="button" onClick={() => moveToPortfolio?.(deal)}>
+          Add To Portfolio
+        </button>
+        {editing && (
+          <button className="secondary-btn" type="button" onClick={saveNote}>
+            Save Note
+          </button>
+        )}
               <button className="danger-btn" type="button" onClick={() => deleteDeal(deal.id)}>
                 Delete
               </button>
             </div>
           </article>
-        );
-      })}
-    </div>
   );
 }
 

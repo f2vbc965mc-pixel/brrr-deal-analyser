@@ -695,7 +695,9 @@ p {
 }
 
 .pricing-grid,
-.vault-page-grid {
+.vault-page-grid,
+.pipeline-board,
+.workspace-layout {
   display: grid;
   gap: 16px;
 }
@@ -707,6 +709,22 @@ p {
 
 .vault-page-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.pipeline-board {
+  grid-template-columns: repeat(5, minmax(220px, 1fr));
+  overflow-x: auto;
+  align-items: start;
+}
+
+.pipeline-column {
+  min-width: 220px;
+  min-height: 320px;
+}
+
+.workspace-layout {
+  grid-template-columns: minmax(320px, 0.55fr) minmax(0, 1fr);
+  align-items: start;
 }
 
 .pricing-card {
@@ -839,9 +857,30 @@ p {
   color: #f5f1e8;
 }
 
+.pipeline-input,
+.inline-edit,
+.stage-select {
+  min-height: 42px;
+  min-width: 0;
+  border: 1px solid rgba(245, 241, 232, 0.12);
+  border-radius: 8px;
+  outline: 0;
+  background: rgba(8, 11, 16, 0.8);
+  color: #f5f1e8;
+  padding: 0 12px;
+}
+
 .note-entry input:focus {
   border-color: #78d8bf;
   box-shadow: 0 0 0 3px rgba(120, 216, 191, 0.12);
+}
+
+.saved-note {
+  margin: 0;
+  padding: 10px;
+  border-radius: 8px;
+  background: rgba(245, 241, 232, 0.035);
+  font-size: 0.82rem;
 }
 
 .bottom-cta {
@@ -934,13 +973,13 @@ p {
 
 .analyzer-grid {
   display: grid;
-  grid-template-columns: minmax(440px, 1.18fr) minmax(320px, 0.82fr) minmax(300px, 0.72fr);
+  grid-template-columns: minmax(420px, 0.82fr) minmax(0, 1.18fr);
   gap: 18px;
   align-items: start;
 }
 
 .analyzer-grid.two-column {
-  grid-template-columns: minmax(420px, 1fr) minmax(340px, 0.82fr) minmax(300px, 0.72fr);
+  grid-template-columns: minmax(420px, 0.82fr) minmax(0, 1.18fr);
 }
 
 .side-stack {
@@ -951,6 +990,54 @@ p {
 .panel {
   min-width: 0;
   padding: 18px;
+}
+
+.analysis-workspace {
+  display: grid;
+  gap: 16px;
+}
+
+.analysis-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 6px;
+  border: 1px solid rgba(245, 241, 232, 0.08);
+  border-radius: 8px;
+  background: rgba(245, 241, 232, 0.035);
+}
+
+.analysis-tab {
+  min-height: 38px;
+  padding: 0 12px;
+  border-radius: 8px;
+  background: transparent;
+  color: #9d968b;
+  font-size: 0.78rem;
+  font-weight: 950;
+}
+
+.analysis-tab:hover,
+.analysis-tab.active {
+  background: #f5f1e8;
+  color: #11151c;
+}
+
+.tab-panel,
+.deal-identity,
+.verdict-sections {
+  display: grid;
+  gap: 14px;
+}
+
+.deal-identity {
+  margin-bottom: 18px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid rgba(245, 241, 232, 0.08);
+}
+
+.nested-panel {
+  box-shadow: none;
 }
 
 .panel-heading {
@@ -1635,6 +1722,21 @@ p {
   color: #ffd3c9;
 }
 
+.inline-action {
+  width: fit-content;
+  padding: 0;
+  background: transparent;
+  color: #cfeee5;
+  font-size: 0.76rem;
+  font-weight: 900;
+}
+
+.inline-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .footer-note {
   width: min(1440px, calc(100% - 32px));
   margin: 22px auto 0;
@@ -1692,6 +1794,7 @@ p {
   .premium-preview-grid,
   .pricing-grid,
   .vault-page-grid,
+  .workspace-layout,
   .checklist-grid,
   .legal-grid,
   .account-grid {
@@ -1703,11 +1806,11 @@ p {
   }
 
   .analyzer-grid {
-    grid-template-columns: minmax(0, 1fr) minmax(320px, 0.76fr);
+    grid-template-columns: 1fr;
   }
 
   .analyzer-grid.two-column {
-    grid-template-columns: minmax(0, 1fr) minmax(320px, 0.76fr);
+    grid-template-columns: 1fr;
   }
 
   .input-panel {
@@ -1754,6 +1857,7 @@ p {
   .vault-grid,
   .pricing-grid,
   .vault-page-grid,
+  .workspace-layout,
   .checklist-grid,
   .legal-grid,
   .account-grid,
@@ -1830,8 +1934,13 @@ p {
   .saved-metrics,
   .saved-actions,
   .vault-actions,
-  .verdict-grid {
+  .verdict-grid,
+  .analysis-tabs {
     grid-template-columns: 1fr;
+  }
+
+  .analysis-tabs {
+    display: grid;
   }
 
   .vault-record-footer {
