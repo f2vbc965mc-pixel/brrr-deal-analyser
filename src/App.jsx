@@ -3,6 +3,8 @@ import { Link, NavLink, Outlet, Route, Routes, useNavigate } from 'react-router-
 
 const STORAGE_KEY = 'brrr-saved-deals';
 const VAULT_STORAGE_KEY = 'acquiraiq-deal-vault';
+const ACCOUNT_STORAGE_KEY = 'acquiraiq-account';
+const UPGRADE_STORAGE_KEY = 'acquiraiq-upgrade-intent';
 
 const initialInputs = {
   purchasePrice: '180000',
@@ -190,9 +192,37 @@ function loadDealVault() {
   }
 }
 
+function loadAccount() {
+  try {
+    const account = JSON.parse(localStorage.getItem(ACCOUNT_STORAGE_KEY));
+    return account && typeof account === 'object' ? account : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveAccount(account) {
+  localStorage.setItem(ACCOUNT_STORAGE_KEY, JSON.stringify(account));
+}
+
+function loadUpgradeIntent() {
+  try {
+    const intent = JSON.parse(localStorage.getItem(UPGRADE_STORAGE_KEY));
+    return intent && typeof intent === 'object' ? intent : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveUpgradeIntent(intent) {
+  localStorage.setItem(UPGRADE_STORAGE_KEY, JSON.stringify(intent));
+}
+
 function getDashboardStats() {
   const savedDeals = loadSavedDeals();
   const vaultItems = loadDealVault();
+  const account = loadAccount();
+  const upgradeIntent = loadUpgradeIntent();
   const bestRoi = savedDeals.reduce((best, deal) => Math.max(best, deal.metrics?.cashOnCashRoi || 0), 0);
   const bestCashflow = savedDeals.reduce((best, deal) => Math.max(best, deal.metrics?.monthlyCashflow || 0), 0);
 
@@ -202,6 +232,9 @@ function getDashboardStats() {
     vaultItems: vaultItems.length,
     bestRoi,
     bestCashflow,
+    account,
+    upgradeIntent,
+    recentVaultItems: vaultItems.slice(0, 3),
     recentDeals: savedDeals.slice(0, 3),
   };
 }
@@ -556,6 +589,58 @@ function getAirbnbStrategyComparison(metrics) {
   return { rows, recommendation: getStrategyRecommendation(rows) };
 }
 
+function downloadTextFile(filename, contents, type = 'text/plain') {
+  const blob = new Blob([contents], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function createBrrrReport(inputs, metrics, verdict, comparison) {
+  return [
+    'AcquiraIQ BRRR Investment Report',
+    `Generated: ${new Date().toLocaleString('en-GB')}`,
+    '',
+    'Inputs',
+    `Purchase price: ${formatMoney(toNumber(inputs.purchasePrice))}`,
+    `Refurb cost: ${formatMoney(toNumber(inputs.refurbCost))}`,
+    `Post-refurb value / ARV: ${formatMoney(toNumber(inputs.refinanceValue))}`,
+    `Expected monthly rent: ${formatMoney(toNumber(inputs.monthlyRent))}`,
+    `Mortgage interest rate: ${formatPercent(toNumber(inputs.interestRate))}`,
+    `Loan-to-value: ${formatPercent(toNumber(inputs.loanToValue))}`,
+    '',
+    'Core Metrics',
+    `Total cash invested: ${formatMoney(metrics.totalCashInvested)}`,
+    `Refinance loan estimate: ${formatMoney(metrics.refinanceLoan)}`,
+    `Cash left in deal: ${formatMoney(metrics.cashLeftInDeal)}`,
+    `Monthly mortgage payment: ${formatMoney(metrics.monthlyMortgage)}`,
+    `Monthly cashflow: ${formatMoney(metrics.monthlyCashflow)}`,
+    `Annual cashflow: ${formatMoney(metrics.annualCashflow)}`,
+    `Gross yield: ${formatPercent(metrics.grossYield)}`,
+    `Net yield: ${formatPercent(metrics.netYield)}`,
+    `Cash-on-cash ROI: ${formatPercent(metrics.cashOnCashRoi)}`,
+    '',
+    'Investor Verdict',
+    `Overall verdict: ${verdict.overallVerdict}`,
+    `Main strength: ${verdict.mainStrength}`,
+    `Main risk: ${verdict.mainRisk}`,
+    `Best strategy: ${verdict.bestStrategy}`,
+    `Investor suitability: ${verdict.investorSuitability}`,
+    '',
+    'Strategy Comparison',
+    `Recommended strategy: ${comparison.recommendation}`,
+    ...comparison.rows.map((row) => `${row.strategy}: monthly profit ${row.monthlyProfit === null ? 'N/A' : formatMoney(row.monthlyProfit)}, yield ${row.yield === null ? 'N/A' : formatPercent(row.yield)}, ROI ${row.roi === null ? 'N/A' : formatPercent(row.roi)}, risk ${row.risk}, capital left ${row.capitalLeft === null ? 'N/A' : formatMoney(row.capitalLeft)}`),
+    '',
+    'Important',
+    'This report is an underwriting aid, not financial, tax or mortgage advice. Verify rent, GDV/ARV, refurb costs and finance terms independently.',
+  ].join('\n');
+}
+
 function App() {
   return (
     <Routes>
@@ -565,6 +650,8 @@ function App() {
         <Route path="brrr" element={<BrrrAnalyzerPage />} />
         <Route path="airbnb" element={<AirbnbAnalyzerPage />} />
         <Route path="platform" element={<PlatformPage />} />
+        <Route path="pricing" element={<PricingPage />} />
+        <Route path="vault" element={<VaultPage />} />
         <Route path="professional-tools" element={<ProfessionalToolsPage />} />
         <Route path="operating-system" element={<OperatingSystemPage />} />
         <Route path="portfolio" element={<PortfolioBlueprintPage />} />
@@ -625,10 +712,24 @@ function LandingPage() {
   const authRef = useRef(null);
   const navigate = useNavigate();
   const [showAuth, setShowAuth] = useState(false);
+  const [email, setEmail] = useState(loadAccount()?.email || '');
+  const [password, setPassword] = useState('');
 
   function startFree() {
     setShowAuth(true);
     window.setTimeout(() => authRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 80);
+  }
+
+  function continueToDashboard() {
+    const cleanEmail = email.trim();
+    if (cleanEmail) {
+      saveAccount({
+        email: cleanEmail,
+        plan: loadAccount()?.plan || 'Free',
+        createdAt: loadAccount()?.createdAt || new Date().toISOString(),
+      });
+    }
+    navigate('/dashboard');
   }
 
   return (
@@ -729,13 +830,13 @@ function LandingPage() {
           <p>Frontend-only account flow for now. Authentication can be connected when the platform is ready.</p>
           <label>
             Email
-            <input type="email" placeholder="investor@example.com" />
+            <input type="email" placeholder="investor@example.com" value={email} onChange={(event) => setEmail(event.target.value)} />
           </label>
           <label>
             Password
-            <input type="password" placeholder="Create a password" />
+            <input type="password" placeholder="Create a password" value={password} onChange={(event) => setPassword(event.target.value)} />
           </label>
-          <button className="primary-btn" type="button" onClick={() => navigate('/dashboard')}>
+          <button className="primary-btn" type="button" onClick={continueToDashboard}>
             Continue
           </button>
         </div>
@@ -803,8 +904,8 @@ function DashboardPage() {
         <div className="dashboard-summary">
           <SummaryCard label="Deals Analysed" value={String(stats.dealsAnalysed)} copy="Saved BRRR scenarios." />
           <SummaryCard label="Saved Deals" value={String(stats.savedScenarios)} copy="Local saved opportunities." />
+          <SummaryCard label="Vault Items" value={String(stats.vaultItems)} copy="Notes, deals and scenarios." />
           <SummaryCard label="Best ROI Found" value={stats.bestRoi > 0 ? formatPercent(stats.bestRoi) : 'No data'} copy="Best saved cash-on-cash ROI." />
-          <SummaryCard label="Potential Monthly Cashflow Identified" value={stats.bestCashflow > 0 ? formatMoney(stats.bestCashflow) : 'No data'} copy="Highest saved cashflow." />
         </div>
       </section>
 
@@ -845,14 +946,26 @@ function DashboardPage() {
               <EmptyLine text="No recent saved analyses yet. Open a module and save your first scenario." />
             )}
           </DashboardPanel>
-          <DashboardPanel title="Saved Deals" meta={`${stats.savedScenarios} saved`}>
-            <EmptyLine text="Saved BRRR scenarios appear inside the analyzer today. Cross-module comparison is prepared for Pro." />
+          <DashboardPanel title="Deal Vault" meta={`${stats.vaultItems} items`}>
+            {stats.recentVaultItems.length > 0 ? (
+              stats.recentVaultItems.map((item) => (
+                <p key={item.id}>{item.title} · {item.type}</p>
+              ))
+            ) : (
+              <EmptyLine text="Saved scenarios, notes and reports will appear here once added." />
+            )}
+            <Link className="panel-link" to="/vault">Open vault</Link>
           </DashboardPanel>
           <DashboardPanel title="Watchlist" meta="Future">
             <EmptyLine text="Track target areas, vendors, agents and deals to revisit when pricing changes." />
           </DashboardPanel>
-          <DashboardPanel title="Investor Notes" meta="Future">
-            <EmptyLine text="Capture assumptions, viewing notes, broker feedback and due-diligence actions." />
+          <DashboardPanel title="Account" meta={stats.account?.plan || 'Free'}>
+            <EmptyLine text={stats.account?.email ? `${stats.account.email} is using the local beta workspace.` : 'Create a free local workspace from the homepage.'} />
+            {stats.upgradeIntent ? (
+              <p>Upgrade interest: {stats.upgradeIntent.plan}</p>
+            ) : (
+              <Link className="panel-link" to="/pricing">View pricing</Link>
+            )}
           </DashboardPanel>
         </div>
       </section>
@@ -865,7 +978,7 @@ function DashboardPage() {
         </div>
         <div className="hero-actions">
           <Link className="primary-link" to="/platform">View Platform</Link>
-          <Link className="secondary-link" to="/roadmap">Roadmap</Link>
+          <Link className="secondary-link" to="/pricing">Pricing</Link>
         </div>
       </section>
     </main>
@@ -1035,6 +1148,23 @@ function BrrrAnalyzerPage() {
     setNoteDraft('');
   }
 
+  function deleteVaultItem(itemId) {
+    saveVault(vaultItems.filter((item) => item.id !== itemId));
+  }
+
+  function exportVault() {
+    downloadTextFile('acquiraiq-deal-vault.json', JSON.stringify(vaultItems, null, 2), 'application/json');
+    setSaveMessage('Deal Vault exported');
+  }
+
+  function exportReport() {
+    downloadTextFile(
+      `${createDealName(inputs).toLowerCase().replaceAll(' ', '-')}-report.txt`,
+      createBrrrReport(inputs, metrics, signatureVerdict, strategyComparison),
+    );
+    setSaveMessage('Investment report exported');
+  }
+
   function loadDeal(deal) {
     setInputs(normalizeInputs(deal.inputs));
     setScenario(deal.scenario || deal.metrics?.scenario || 'expected');
@@ -1069,8 +1199,8 @@ function BrrrAnalyzerPage() {
         </div>
         <div className="module-header-actions">
           {saveMessage && <span>{saveMessage}</span>}
-          <button className="secondary-btn" type="button">
-            Export report · Pro
+          <button className="secondary-btn" type="button" onClick={exportReport}>
+            Export report
           </button>
           <button className="primary-btn" type="button" onClick={saveCurrentDeal}>
             Save Deal
@@ -1143,6 +1273,8 @@ function BrrrAnalyzerPage() {
               noteDraft={noteDraft}
               setNoteDraft={setNoteDraft}
               addNote={addNote}
+              deleteVaultItem={deleteVaultItem}
+              exportVault={exportVault}
             />
             <PanelHeading label="Portfolio" title="Saved Deals" meta={`${savedDeals.length} saved`} />
             <SaveCompareFramework />
@@ -1417,6 +1549,164 @@ function PlatformPage() {
       <RoadmapBlock />
       <StrategyComparisonPreview />
       <DealVaultPreview />
+
+      <section className="upgrade-strip glass-card">
+        <div>
+          <p className="eyebrow">Beta pricing</p>
+          <h2>Prepare the paid plan without adding payment risk too early.</h2>
+          <p>Pricing captures upgrade intent today and is ready to connect to Stripe Checkout when backend billing is added.</p>
+        </div>
+        <div className="hero-actions">
+          <Link className="primary-link" to="/pricing">View Pricing</Link>
+          <Link className="secondary-link" to="/vault">Open Deal Vault</Link>
+        </div>
+      </section>
+    </main>
+  );
+}
+
+function PricingPage() {
+  const [account, setAccount] = useState(loadAccount);
+  const [upgradeIntent, setUpgradeIntent] = useState(loadUpgradeIntent);
+  const plans = [
+    {
+      name: 'Free',
+      price: '£0',
+      badge: 'Current',
+      copy: 'For testing the core underwriting workflow.',
+      items: ['BRRR Analyzer', 'Airbnb Analyzer', 'Local saved deals', 'Basic Deal Vault'],
+    },
+    {
+      name: 'Pro',
+      price: '£12/mo',
+      badge: 'Recommended',
+      copy: 'For investors actively reviewing opportunities every month.',
+      items: ['Unlimited local scenarios', 'Investor Verdict Engine', 'Strategy Comparison', 'Report export', 'Advanced sensitivity views'],
+    },
+    {
+      name: 'Premium',
+      price: '£29/mo',
+      badge: 'Future',
+      copy: 'For portfolio builders who need workflow, pipeline and reporting tools.',
+      items: ['Portfolio tracker', 'Deal pipeline', 'Growth forecasting', 'Investor CRM', 'Team workspace roadmap'],
+    },
+  ];
+
+  function choosePlan(plan) {
+    const nextIntent = {
+      plan: plan.name,
+      price: plan.price,
+      createdAt: new Date().toISOString(),
+    };
+    const nextAccount = {
+      ...(account || {}),
+      plan: account?.plan || 'Free',
+      requestedPlan: plan.name,
+      updatedAt: new Date().toISOString(),
+    };
+    saveUpgradeIntent(nextIntent);
+    saveAccount(nextAccount);
+    setUpgradeIntent(nextIntent);
+    setAccount(nextAccount);
+  }
+
+  return (
+    <main className="page pricing-page">
+      <section className="page-hero compact">
+        <p className="eyebrow">Pricing</p>
+        <h1>Simple pricing for serious deal analysis</h1>
+        <p>Payment processing is intentionally not connected yet. This page validates upgrade demand and provides a clean Stripe-ready pricing structure.</p>
+      </section>
+
+      <section className="pricing-grid">
+        {plans.map((plan) => (
+          <article className={plan.name === 'Pro' ? 'pricing-card featured glass-card' : 'pricing-card glass-card'} key={plan.name}>
+            <span>{plan.badge}</span>
+            <h2>{plan.name}</h2>
+            <strong>{plan.price}</strong>
+            <p>{plan.copy}</p>
+            <ul>
+              {plan.items.map((item) => <li key={item}>{item}</li>)}
+            </ul>
+            <button className={plan.name === 'Pro' ? 'primary-btn' : 'secondary-btn'} type="button" onClick={() => choosePlan(plan)}>
+              {plan.name === 'Free' ? 'Use Free' : `Register interest in ${plan.name}`}
+            </button>
+          </article>
+        ))}
+      </section>
+
+      <section className="upgrade-strip glass-card">
+        <div>
+          <p className="eyebrow">Billing readiness</p>
+          <h2>{upgradeIntent ? `${upgradeIntent.plan} interest saved` : 'Ready for Stripe Checkout next'}</h2>
+          <p>
+            {upgradeIntent
+              ? `Your upgrade preference is saved locally. The next implementation step is connecting this plan to Stripe Checkout and webhook-managed subscription status.`
+              : 'The pricing structure is live in the product. Backend auth, Stripe Checkout and subscription webhooks should be connected before charging users.'}
+          </p>
+        </div>
+        <Link className="primary-link" to="/dashboard">Back to Dashboard</Link>
+      </section>
+    </main>
+  );
+}
+
+function VaultPage() {
+  const [vaultItems, setVaultItems] = useState(loadDealVault);
+
+  function saveVault(nextVaultItems) {
+    setVaultItems(nextVaultItems);
+    localStorage.setItem(VAULT_STORAGE_KEY, JSON.stringify(nextVaultItems));
+  }
+
+  function deleteVaultItem(itemId) {
+    saveVault(vaultItems.filter((item) => item.id !== itemId));
+  }
+
+  function exportVault() {
+    downloadTextFile('acquiraiq-deal-vault.json', JSON.stringify(vaultItems, null, 2), 'application/json');
+  }
+
+  return (
+    <main className="page vault-page">
+      <section className="page-hero compact">
+        <p className="eyebrow">Deal Vault</p>
+        <h1>Your investment evidence</h1>
+        <p>Saved deals, notes and scenarios from your local workspace. This becomes the foundation for account-based storage later.</p>
+      </section>
+
+      <section className="upgrade-strip glass-card">
+        <div>
+          <p className="eyebrow">Local vault</p>
+          <h2>{vaultItems.length} saved items</h2>
+          <p>Export your vault before clearing browser data. Cloud sync should be the next backend milestone.</p>
+        </div>
+        <div className="hero-actions">
+          <button className="primary-btn" type="button" onClick={exportVault}>Export Vault</button>
+          <Link className="secondary-link" to="/brrr">Add BRRR Deal</Link>
+        </div>
+      </section>
+
+      {vaultItems.length === 0 ? (
+        <section className="empty-state">
+          <strong>No vault items yet</strong>
+          <p>Save a deal, scenario or note from the BRRR analyzer to start building your decision record.</p>
+        </section>
+      ) : (
+        <section className="vault-page-grid">
+          {vaultItems.map((item) => (
+            <article className="vault-record glass-card" key={item.id}>
+              <span>{item.type}</span>
+              <strong>{item.title}</strong>
+              <p>{item.copy}</p>
+              <div className="vault-record-footer">
+                <small>{formatShortDate(new Date(item.createdAt))} · {item.scenario || 'saved'}</small>
+                <button className="inline-danger" type="button" onClick={() => deleteVaultItem(item.id)}>Delete</button>
+              </div>
+            </article>
+          ))}
+        </section>
+      )}
     </main>
   );
 }
@@ -1781,12 +2071,15 @@ function EmptyVaultItem({ title, copy }) {
   );
 }
 
-function DealVaultPanel({ vaultItems, saveScenario, noteDraft, setNoteDraft, addNote }) {
+function DealVaultPanel({ vaultItems, saveScenario, noteDraft, setNoteDraft, addNote, deleteVaultItem, exportVault }) {
   return (
     <div className="deal-vault-panel">
       <div className="vault-actions">
         <button className="secondary-btn" type="button" onClick={saveScenario}>
           Save Scenario
+        </button>
+        <button className="secondary-btn" type="button" onClick={exportVault}>
+          Export Vault
         </button>
       </div>
       <label className="note-entry">
@@ -1814,7 +2107,10 @@ function DealVaultPanel({ vaultItems, saveScenario, noteDraft, setNoteDraft, add
               <span>{item.type}</span>
               <strong>{item.title}</strong>
               <p>{item.copy}</p>
-              <small>{formatShortDate(new Date(item.createdAt))} · {item.scenario || 'saved'}</small>
+              <div className="vault-record-footer">
+                <small>{formatShortDate(new Date(item.createdAt))} · {item.scenario || 'saved'}</small>
+                <button className="inline-danger" type="button" onClick={() => deleteVaultItem(item.id)}>Delete</button>
+              </div>
             </article>
           ))}
         </div>
