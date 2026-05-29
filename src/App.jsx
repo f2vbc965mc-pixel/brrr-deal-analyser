@@ -5,6 +5,10 @@ const STORAGE_KEY = 'brrr-saved-deals';
 const VAULT_STORAGE_KEY = 'acquiraiq-deal-vault';
 const ACCOUNT_STORAGE_KEY = 'acquiraiq-account';
 const UPGRADE_STORAGE_KEY = 'acquiraiq-upgrade-intent';
+const SYNC_STATUS_STORAGE_KEY = 'acquiraiq-sync-status';
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || '';
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+const CLOUD_SYNC_ENABLED = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 
 const initialInputs = {
   purchasePrice: '180000',
@@ -218,6 +222,88 @@ function saveUpgradeIntent(intent) {
   localStorage.setItem(UPGRADE_STORAGE_KEY, JSON.stringify(intent));
 }
 
+function loadSyncStatus() {
+  try {
+    const status = JSON.parse(localStorage.getItem(SYNC_STATUS_STORAGE_KEY));
+    return status && typeof status === 'object' ? status : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveSyncStatus(status) {
+  localStorage.setItem(SYNC_STATUS_STORAGE_KEY, JSON.stringify(status));
+}
+
+function getWorkspacePayload() {
+  return {
+    account: loadAccount(),
+    savedDeals: loadSavedDeals(),
+    vaultItems: loadDealVault(),
+    upgradeIntent: loadUpgradeIntent(),
+    exportedAt: new Date().toISOString(),
+  };
+}
+
+async function syncWorkspaceToCloud() {
+  if (!CLOUD_SYNC_ENABLED) {
+    const status = {
+      state: 'local-only',
+      message: 'Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to enable cloud sync.',
+      updatedAt: new Date().toISOString(),
+    };
+    saveSyncStatus(status);
+    return status;
+  }
+
+  const account = loadAccount();
+  const userEmail = account?.email?.trim();
+  if (!userEmail) {
+    const status = {
+      state: 'needs-account',
+      message: 'Create a free account before syncing this workspace.',
+      updatedAt: new Date().toISOString(),
+    };
+    saveSyncStatus(status);
+    return status;
+  }
+
+  try {
+    const response = await fetch(`${SUPABASE_URL}/rest/v1/workspaces?on_conflict=email`, {
+      method: 'POST',
+      headers: {
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+        'Content-Type': 'application/json',
+        Prefer: 'resolution=merge-duplicates,return=minimal',
+      },
+      body: JSON.stringify({
+        email: userEmail,
+        payload: getWorkspacePayload(),
+        updated_at: new Date().toISOString(),
+      }),
+    });
+
+    if (!response.ok) throw new Error('Cloud sync request failed');
+
+    const status = {
+      state: 'synced',
+      message: 'Workspace synced to Supabase.',
+      updatedAt: new Date().toISOString(),
+    };
+    saveSyncStatus(status);
+    return status;
+  } catch {
+    const status = {
+      state: 'error',
+      message: 'Cloud sync could not complete. Local data is still safe in this browser.',
+      updatedAt: new Date().toISOString(),
+    };
+    saveSyncStatus(status);
+    return status;
+  }
+}
+
 function getDashboardStats() {
   const savedDeals = loadSavedDeals();
   const vaultItems = loadDealVault();
@@ -234,6 +320,7 @@ function getDashboardStats() {
     bestCashflow,
     account,
     upgradeIntent,
+    syncStatus: loadSyncStatus(),
     recentVaultItems: vaultItems.slice(0, 3),
     recentDeals: savedDeals.slice(0, 3),
   };
@@ -652,6 +739,12 @@ function App() {
         <Route path="platform" element={<PlatformPage />} />
         <Route path="pricing" element={<PricingPage />} />
         <Route path="vault" element={<VaultPage />} />
+        <Route path="account" element={<AccountPage />} />
+        <Route path="calculations" element={<CalculationsPage />} />
+        <Route path="privacy" element={<PrivacyPage />} />
+        <Route path="terms" element={<TermsPage />} />
+        <Route path="cookies" element={<CookiesPage />} />
+        <Route path="contact" element={<ContactPage />} />
         <Route path="professional-tools" element={<ProfessionalToolsPage />} />
         <Route path="operating-system" element={<OperatingSystemPage />} />
         <Route path="portfolio" element={<PortfolioBlueprintPage />} />
@@ -704,6 +797,12 @@ function Shell() {
         </div>
       </nav>
       <Outlet />
+      <footer className="footer-note">
+        <span>AcquiraIQ</span>
+        <p>
+          Investment analysis software, not financial advice. Review the <Link to="/calculations">calculation guide</Link>, <Link to="/privacy">privacy policy</Link>, <Link to="/terms">terms</Link> and <Link to="/contact">contact</Link>.
+        </p>
+      </footer>
     </>
   );
 }
@@ -823,6 +922,18 @@ function LandingPage() {
         />
       </section>
 
+      <section className="upgrade-strip glass-card">
+        <div>
+          <p className="eyebrow">Launch offer</p>
+          <h2>Free tools now. Pro workflow when you are ready.</h2>
+          <p>Use the calculators, Deal Vault and export flow today. Pricing is structured for Stripe subscriptions later, without switching payments on yet.</p>
+        </div>
+        <div className="hero-actions">
+          <Link className="primary-link" to="/pricing">View Pricing</Link>
+          <Link className="secondary-link" to="/calculations">Calculation Guide</Link>
+        </div>
+      </section>
+
       <section ref={authRef} className={showAuth ? 'auth-section visible' : 'auth-section'}>
         <div className="auth-card glass-card">
           <p className="eyebrow">Free account</p>
@@ -855,6 +966,8 @@ function LandingPage() {
 
 function DashboardPage() {
   const stats = getDashboardStats();
+  const [syncStatus, setSyncStatus] = useState(stats.syncStatus);
+  const [syncing, setSyncing] = useState(false);
   const modules = [
     {
       title: 'BRRR Analyzer',
@@ -887,6 +1000,13 @@ function DashboardPage() {
     },
   ];
 
+  async function handleSync() {
+    setSyncing(true);
+    const nextStatus = await syncWorkspaceToCloud();
+    setSyncStatus(nextStatus);
+    setSyncing(false);
+  }
+
   return (
     <main className="page dashboard-page">
       <section className="page-hero compact">
@@ -906,6 +1026,20 @@ function DashboardPage() {
           <SummaryCard label="Saved Deals" value={String(stats.savedScenarios)} copy="Local saved opportunities." />
           <SummaryCard label="Vault Items" value={String(stats.vaultItems)} copy="Notes, deals and scenarios." />
           <SummaryCard label="Best ROI Found" value={stats.bestRoi > 0 ? formatPercent(stats.bestRoi) : 'No data'} copy="Best saved cash-on-cash ROI." />
+        </div>
+      </section>
+
+      <section className="onboarding-panel glass-card">
+        <SectionHeading
+          label="Launch checklist"
+          title="Get your workspace ready"
+          copy="The fastest path from first visit to a retained user is a saved deal, a clear verdict and an exported decision record."
+        />
+        <div className="checklist-grid">
+          <ChecklistItem done={Boolean(stats.account?.email)} title="Create account" copy="Save a local beta account email." />
+          <ChecklistItem done={stats.dealsAnalysed > 0} title="Save first deal" copy="Use BRRR and save an opportunity." />
+          <ChecklistItem done={stats.vaultItems > 0} title="Build Deal Vault" copy="Save a scenario or investor note." />
+          <ChecklistItem done={Boolean(stats.upgradeIntent)} title="Choose plan" copy="Register interest in Pro or Premium." />
         </div>
       </section>
 
@@ -967,6 +1101,20 @@ function DashboardPage() {
               <Link className="panel-link" to="/pricing">View pricing</Link>
             )}
           </DashboardPanel>
+        </div>
+      </section>
+
+      <section className="upgrade-strip glass-card">
+        <div>
+          <p className="eyebrow">Cloud readiness</p>
+          <h2>{CLOUD_SYNC_ENABLED ? 'Cloud sync is configured' : 'Cloud sync is ready to connect'}</h2>
+          <p>{syncStatus?.message || 'Local data works now. Add Supabase environment variables and the workspace table to enable browser-to-cloud sync.'}</p>
+        </div>
+        <div className="hero-actions">
+          <button className="primary-btn" type="button" onClick={handleSync} disabled={syncing}>
+            {syncing ? 'Syncing...' : 'Sync Workspace'}
+          </button>
+          <Link className="secondary-link" to="/account">Account</Link>
         </div>
       </section>
 
@@ -1711,6 +1859,206 @@ function VaultPage() {
   );
 }
 
+function AccountPage() {
+  const [account, setAccount] = useState(loadAccount);
+  const [email, setEmail] = useState(account?.email || '');
+  const [name, setName] = useState(account?.name || '');
+  const [syncStatus, setSyncStatus] = useState(loadSyncStatus);
+  const [message, setMessage] = useState('');
+  const [syncing, setSyncing] = useState(false);
+
+  function saveProfile() {
+    const nextAccount = {
+      ...(account || {}),
+      email: email.trim(),
+      name: name.trim(),
+      plan: account?.plan || 'Free',
+      createdAt: account?.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    saveAccount(nextAccount);
+    setAccount(nextAccount);
+    setMessage('Account saved');
+  }
+
+  async function handleSync() {
+    setSyncing(true);
+    const nextStatus = await syncWorkspaceToCloud();
+    setSyncStatus(nextStatus);
+    setSyncing(false);
+  }
+
+  function exportWorkspace() {
+    downloadTextFile('acquiraiq-workspace-export.json', JSON.stringify(getWorkspacePayload(), null, 2), 'application/json');
+    setMessage('Workspace exported');
+  }
+
+  function clearLocalWorkspace() {
+    localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(VAULT_STORAGE_KEY);
+    localStorage.removeItem(UPGRADE_STORAGE_KEY);
+    localStorage.removeItem(SYNC_STATUS_STORAGE_KEY);
+    setSyncStatus(null);
+    setMessage('Local deals, vault items and upgrade intent cleared');
+  }
+
+  return (
+    <main className="page account-page">
+      <section className="page-hero compact">
+        <p className="eyebrow">Account</p>
+        <h1>Your workspace settings</h1>
+        <p>Manage the local beta account, prepare cloud sync and export your workspace data before live authentication is connected.</p>
+      </section>
+
+      <section className="account-grid">
+        <div className="panel">
+          <PanelHeading label="Profile" title="Local Account" meta={account?.plan || 'Free'} />
+          <label className="note-entry">
+            <span>Name</span>
+            <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Your name" />
+          </label>
+          <label className="note-entry">
+            <span>Email</span>
+            <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="investor@example.com" />
+          </label>
+          <button className="primary-btn" type="button" onClick={saveProfile}>Save Account</button>
+          {message && <p className="status-message">{message}</p>}
+        </div>
+
+        <div className="panel">
+          <PanelHeading label="Cloud sync" title="Supabase Ready" meta={CLOUD_SYNC_ENABLED ? 'Configured' : 'Local only'} />
+          <div className="verdict-box">
+            <span>Status</span>
+            <p>{syncStatus?.message || 'Add Supabase environment variables to sync this workspace to a cloud table.'}</p>
+          </div>
+          <MiniTable
+            title="Required environment"
+            rows={[
+              { label: 'VITE_SUPABASE_URL', value: SUPABASE_URL ? 'Set' : 'Missing' },
+              { label: 'VITE_SUPABASE_ANON_KEY', value: SUPABASE_ANON_KEY ? 'Set' : 'Missing' },
+              { label: 'Table', value: 'workspaces' },
+            ]}
+          />
+          <button className="primary-btn" type="button" onClick={handleSync} disabled={syncing}>{syncing ? 'Syncing...' : 'Sync Workspace'}</button>
+        </div>
+
+        <div className="panel">
+          <PanelHeading label="Data" title="Export and Control" meta="Beta" />
+          <p>Export your full workspace as JSON. This supports migration to a real account database later.</p>
+          <div className="stacked-actions">
+            <button className="secondary-btn" type="button" onClick={exportWorkspace}>Export Workspace</button>
+            <button className="danger-btn" type="button" onClick={clearLocalWorkspace}>Clear Local Workspace</button>
+          </div>
+        </div>
+      </section>
+    </main>
+  );
+}
+
+function CalculationsPage() {
+  return (
+    <main className="page legal-page">
+      <section className="page-hero compact">
+        <p className="eyebrow">Calculation guide</p>
+        <h1>How AcquiraIQ calculates deal metrics</h1>
+        <p>Transparent formulas help users understand what the software is showing before they rely on the numbers.</p>
+      </section>
+
+      <section className="legal-grid">
+        <InfoCard title="Cash-on-cash ROI" copy="Annual cashflow divided by total cash invested, multiplied by 100. This avoids inflated refinance-based ROI." />
+        <InfoCard title="Gross yield" copy="Annual gross rent divided by purchase price. This is a property performance screen, not investor return." />
+        <InfoCard title="Net yield" copy="Annual cashflow divided by total cash invested after finance, running costs and void allowance." />
+        <InfoCard title="Cash left in deal" copy="Total cash invested less the estimated refinance loan. This shows capital still tied up after refinance." />
+        <InfoCard title="Airbnb profit" copy="Gross monthly revenue minus platform fees, management fees, finance, utilities and cleaning costs." />
+        <InfoCard title="Sensitivity analysis" copy="Stress tests show how results change when rent, rates, GDV or occupancy move away from the expected case." />
+      </section>
+
+      <section className="trust-section glass-card">
+        <SectionHeading
+          label="Important"
+          title="Estimates, not advice"
+          copy="AcquiraIQ is an underwriting aid. Verify rent, GDV, refurb costs, lending terms, tax and local regulation with qualified professionals before committing capital."
+        />
+      </section>
+    </main>
+  );
+}
+
+function PrivacyPage() {
+  return (
+    <LegalPage
+      label="Privacy"
+      title="Privacy Policy"
+      copy="This beta version stores workspace data locally in your browser unless cloud sync is configured."
+      sections={[
+        ['Data we store', 'Email, local account details, saved deals, notes, scenarios, upgrade interest and exported workspace data.'],
+        ['Where it is stored', 'By default, data is stored in browser localStorage. If Supabase sync is configured, workspace data can be sent to the configured Supabase project.'],
+        ['Payments', 'Stripe or payment processing is not connected yet. Do not enter payment details into AcquiraIQ at this stage.'],
+        ['Your controls', 'You can export workspace data from Account or Deal Vault and clear local workspace data from Account.'],
+      ]}
+    />
+  );
+}
+
+function TermsPage() {
+  return (
+    <LegalPage
+      label="Terms"
+      title="Terms of Use"
+      copy="Use AcquiraIQ as decision-support software, not as a substitute for professional advice."
+      sections={[
+        ['No financial advice', 'AcquiraIQ provides calculations and analysis prompts only. It does not recommend that you buy, sell, refinance or operate any property.'],
+        ['User responsibility', 'You are responsible for verifying assumptions, market data, lending terms, tax position and legal obligations.'],
+        ['Beta software', 'Features may change while the platform is being prepared for paid subscriptions. Export important data regularly.'],
+        ['Future payments', 'Paid plans are shown for product validation. Payment processing is not active until Stripe or another processor is connected.'],
+      ]}
+    />
+  );
+}
+
+function CookiesPage() {
+  return (
+    <LegalPage
+      label="Cookies"
+      title="Cookie Notice"
+      copy="The current app uses local browser storage to keep the workspace usable between visits."
+      sections={[
+        ['Essential storage', 'AcquiraIQ stores account, deals, vault items and upgrade interest locally so the product works without a backend.'],
+        ['Analytics', 'No third-party analytics are connected in this build. If analytics are added later, this notice should be updated.'],
+        ['Control', 'You can clear local workspace data from the Account page or by clearing browser site data.'],
+      ]}
+    />
+  );
+}
+
+function ContactPage() {
+  return (
+    <main className="page legal-page">
+      <section className="page-hero compact">
+        <p className="eyebrow">Contact</p>
+        <h1>Support and beta feedback</h1>
+        <p>Use this page as the public support destination until a dedicated helpdesk is connected.</p>
+      </section>
+
+      <section className="account-grid">
+        <div className="panel">
+          <PanelHeading label="Support" title="Contact Email" meta="Beta" />
+          <p>Set up a dedicated inbox such as support@acquiraiq.co.uk before launch and update this page.</p>
+          <a className="primary-link" href="mailto:support@acquiraiq.co.uk">Email Support</a>
+        </div>
+        <div className="panel">
+          <PanelHeading label="Feedback" title="What to ask beta users" meta="Useful" />
+          <ul className="legal-list">
+            <li>Which metric helped you make a decision fastest?</li>
+            <li>What would make this worth paying for monthly?</li>
+            <li>Which report or export would you send to a broker, partner or lender?</li>
+          </ul>
+        </div>
+      </section>
+    </main>
+  );
+}
+
 function RoadmapPage() {
   return (
     <main className="page roadmap-page">
@@ -2181,6 +2529,32 @@ function SectionHeading({ label, title, copy }) {
   );
 }
 
+function InfoCard({ title, copy }) {
+  return (
+    <article className="info-card glass-card">
+      <h3>{title}</h3>
+      <p>{copy}</p>
+    </article>
+  );
+}
+
+function LegalPage({ label, title, copy, sections }) {
+  return (
+    <main className="page legal-page">
+      <section className="page-hero compact">
+        <p className="eyebrow">{label}</p>
+        <h1>{title}</h1>
+        <p>{copy}</p>
+      </section>
+      <section className="legal-grid">
+        {sections.map(([sectionTitle, sectionCopy]) => (
+          <InfoCard title={sectionTitle} copy={sectionCopy} key={sectionTitle} />
+        ))}
+      </section>
+    </main>
+  );
+}
+
 function FeatureCard({ title, copy, status }) {
   return (
     <article className="feature-card glass-card">
@@ -2195,6 +2569,16 @@ function WorkflowStep({ number, title, copy }) {
   return (
     <article className="workflow-step glass-card">
       <span>{number}</span>
+      <h3>{title}</h3>
+      <p>{copy}</p>
+    </article>
+  );
+}
+
+function ChecklistItem({ done, title, copy }) {
+  return (
+    <article className={done ? 'checklist-item done' : 'checklist-item'}>
+      <span>{done ? 'Done' : 'Next'}</span>
       <h3>{title}</h3>
       <p>{copy}</p>
     </article>

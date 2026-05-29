@@ -410,6 +410,7 @@ p {
 
 .progress-panel,
 .workspace-panel,
+.onboarding-panel,
 .platform-section,
 .roadmap-block,
 .deal-vault {
@@ -426,7 +427,10 @@ p {
 .workspace-grid,
 .premium-preview-grid,
 .roadmap-columns,
-.vault-grid {
+.vault-grid,
+.checklist-grid,
+.legal-grid,
+.account-grid {
   display: grid;
   gap: 14px;
 }
@@ -440,8 +444,14 @@ p {
 }
 
 .roadmap-columns,
-.vault-grid {
+.vault-grid,
+.legal-grid,
+.account-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.checklist-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .feature-card,
@@ -466,7 +476,9 @@ p {
 .input-card:hover,
 .premium-preview-card:hover,
 .vault-item:hover,
-.roadmap-columns article:hover {
+.roadmap-columns article:hover,
+.info-card:hover,
+.checklist-item:hover {
   transform: translateY(-2px);
   border-color: rgba(120, 216, 191, 0.3);
   background: rgba(24, 31, 41, 0.86);
@@ -547,7 +559,9 @@ p {
 
 .premium-preview-card,
 .vault-item,
-.roadmap-columns article {
+.roadmap-columns article,
+.info-card,
+.checklist-item {
   min-height: 170px;
   padding: 18px;
   border: 1px solid rgba(245, 241, 232, 0.08);
@@ -574,15 +588,45 @@ p {
 
 .premium-preview-card h3,
 .vault-item h3,
-.roadmap-columns h3 {
+.roadmap-columns h3,
+.info-card h3,
+.checklist-item h3 {
   margin-bottom: 8px;
   color: #f5f1e8;
 }
 
 .premium-preview-card p,
-.vault-item p {
+.vault-item p,
+.info-card p,
+.checklist-item p {
   margin-bottom: 0;
   font-size: 0.86rem;
+}
+
+.checklist-item {
+  min-height: 150px;
+}
+
+.checklist-item > span {
+  display: inline-flex;
+  width: fit-content;
+  margin-bottom: 14px;
+  padding: 6px 9px;
+  border-radius: 8px;
+  background: rgba(216, 180, 111, 0.1);
+  color: #ead2a4;
+  font-size: 0.7rem;
+  font-weight: 950;
+  text-transform: uppercase;
+}
+
+.checklist-item.done {
+  border-color: rgba(120, 216, 191, 0.24);
+}
+
+.checklist-item.done > span {
+  background: rgba(120, 216, 191, 0.12);
+  color: #cfeee5;
 }
 
 .roadmap-columns article {
@@ -784,7 +828,8 @@ p {
   font-weight: 850;
 }
 
-.auth-card input {
+.auth-card input,
+.note-entry input {
   min-height: 46px;
   padding: 0 12px;
   border: 1px solid rgba(245, 241, 232, 0.12);
@@ -792,6 +837,11 @@ p {
   outline: 0;
   background: rgba(245, 241, 232, 0.05);
   color: #f5f1e8;
+}
+
+.note-entry input:focus {
+  border-color: #78d8bf;
+  box-shadow: 0 0 0 3px rgba(120, 216, 191, 0.12);
 }
 
 .bottom-cta {
@@ -1538,6 +1588,32 @@ p {
   font-weight: 800;
 }
 
+.status-message {
+  margin-bottom: 0;
+  color: #cfeee5;
+  font-size: 0.86rem;
+  font-weight: 850;
+}
+
+.stacked-actions {
+  display: grid;
+  gap: 10px;
+}
+
+.legal-page .trust-section {
+  margin-top: 18px;
+}
+
+.legal-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding-left: 18px;
+  color: #b8b0a4;
+  font-size: 0.88rem;
+  line-height: 1.55;
+}
+
 .vault-record-footer {
   display: flex;
   justify-content: space-between;
@@ -1581,6 +1657,11 @@ p {
   text-align: right;
 }
 
+.footer-note a {
+  color: #dcd5c9;
+  font-weight: 850;
+}
+
 .not-found-page {
   display: grid;
   min-height: 70vh;
@@ -1610,7 +1691,10 @@ p {
   .workspace-grid,
   .premium-preview-grid,
   .pricing-grid,
-  .vault-page-grid {
+  .vault-page-grid,
+  .checklist-grid,
+  .legal-grid,
+  .account-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -1670,6 +1754,9 @@ p {
   .vault-grid,
   .pricing-grid,
   .vault-page-grid,
+  .checklist-grid,
+  .legal-grid,
+  .account-grid,
   .summary-strip,
   .analyzer-grid {
     grid-template-columns: 1fr;
