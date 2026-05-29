@@ -400,6 +400,31 @@ function getAirbnbHealthSummary(metrics) {
   ];
 }
 
+function getSignatureVerdict(strategy, metrics, health) {
+  const mainStrength = health.strengths[0] || 'The model has enough assumptions to support a structured first review.';
+  const mainRisk = health.risks[0] || 'The key risk is still assumption quality: validate rent, costs, finance and market demand.';
+  const bestUseCase =
+    strategy === 'BRRR'
+      ? metrics.cashLeftInDeal <= metrics.totalCashInvested * 0.35
+        ? 'Investors focused on recycling capital through a refinance-led BRRR strategy.'
+        : 'Investors who are comfortable leaving more capital in the project for longer-term cashflow.'
+      : metrics.monthlyDifference >= 0
+        ? 'Investors comparing operational upside from short-term rental against a simpler long-term let.'
+        : 'Investors prioritising stability and lower operational complexity over maximum revenue.';
+
+  return {
+    verdict:
+      strategy === 'BRRR'
+        ? `${metrics.rating?.label || 'Reviewed'} BRRR candidate based on current cashflow, yield and refinance assumptions.`
+        : metrics.monthlyDifference >= 0
+          ? 'Airbnb may outperform the BTL baseline under the current assumptions.'
+          : 'BTL may be safer based on the current short-term rental assumptions.',
+    mainStrength,
+    mainRisk,
+    bestUseCase,
+  };
+}
+
 function App() {
   return (
     <Routes>
@@ -408,9 +433,11 @@ function App() {
         <Route path="dashboard" element={<DashboardPage />} />
         <Route path="brrr" element={<BrrrAnalyzerPage />} />
         <Route path="airbnb" element={<AirbnbAnalyzerPage />} />
+        <Route path="platform" element={<PlatformPage />} />
         <Route path="professional-tools" element={<ProfessionalToolsPage />} />
         <Route path="operating-system" element={<OperatingSystemPage />} />
         <Route path="portfolio" element={<PortfolioBlueprintPage />} />
+        <Route path="roadmap" element={<RoadmapPage />} />
         <Route path="*" element={<NotFoundPage />} />
       </Route>
     </Routes>
@@ -445,16 +472,13 @@ function Shell() {
             Dashboard
           </NavLink>
           <NavLink to="/brrr" onClick={() => setMenuOpen(false)}>
-            BRRR Analyzer
+            BRRR
           </NavLink>
           <NavLink to="/airbnb" onClick={() => setMenuOpen(false)}>
-            Airbnb Analyzer
+            Airbnb
           </NavLink>
-          <NavLink to="/professional-tools" onClick={() => setMenuOpen(false)}>
-            Pro Tools
-          </NavLink>
-          <NavLink to="/operating-system" onClick={() => setMenuOpen(false)}>
-            Premium
+          <NavLink to="/platform" onClick={() => setMenuOpen(false)}>
+            Platform
           </NavLink>
           <Link className="nav-cta" to="/" onClick={() => setMenuOpen(false)}>
             Start Free
@@ -636,20 +660,21 @@ function DashboardPage() {
       <section className="page-hero compact">
         <p className="eyebrow">PropertyIQ workspace</p>
         <h1>Investment Dashboard</h1>
-        <p>Choose a module to analyse your next opportunity.</p>
+        <p>The Investor Operating System for analysing opportunities, saving scenarios and building a repeatable property workflow.</p>
       </section>
 
-      <section className="dashboard-summary">
-        <SummaryCard label="Deals Analysed" value={String(stats.dealsAnalysed)} copy="Saved BRRR scenarios in this browser." />
-        <SummaryCard label="Saved Scenarios" value={String(stats.savedScenarios)} copy="Prepared for future deal comparison." />
-        <SummaryCard label="Best ROI" value={stats.bestRoi > 0 ? formatPercent(stats.bestRoi) : 'No data'} copy="Best saved cash-on-cash ROI." />
-        <SummaryCard label="Best Cashflow" value={stats.bestCashflow > 0 ? formatMoney(stats.bestCashflow) : 'No data'} copy="Highest saved monthly cashflow." />
-      </section>
-
-      <section className="membership-grid">
-        <MembershipTier title="Free" badge="Current" items={['BRRR Analyzer', 'Airbnb early access', 'Limited saved scenarios']} />
-        <MembershipTier title="Pro" badge="Preview" items={['PDF Investment Reports', 'Advanced Deal Comparison', 'Unlimited Saved Deals']} />
-        <MembershipTier title="Premium" badge="Roadmap" items={['Portfolio Tracker', 'Deal Pipeline', 'Investor Operating System']} />
+      <section className="progress-panel glass-card">
+        <div>
+          <p className="eyebrow">Investor progress</p>
+          <h2>Your analysis workspace</h2>
+          <p>Track the evidence you are building as you review opportunities. This uses saved scenarios in your browser for now.</p>
+        </div>
+        <div className="dashboard-summary">
+          <SummaryCard label="Deals Analysed" value={String(stats.dealsAnalysed)} copy="Saved BRRR scenarios." />
+          <SummaryCard label="Saved Deals" value={String(stats.savedScenarios)} copy="Local saved opportunities." />
+          <SummaryCard label="Best ROI Found" value={stats.bestRoi > 0 ? formatPercent(stats.bestRoi) : 'No data'} copy="Best saved cash-on-cash ROI." />
+          <SummaryCard label="Potential Monthly Cashflow Identified" value={stats.bestCashflow > 0 ? formatMoney(stats.bestCashflow) : 'No data'} copy="Highest saved cashflow." />
+        </div>
       </section>
 
       <section id="modules" className="module-grid">
@@ -673,36 +698,43 @@ function DashboardPage() {
         ))}
       </section>
 
-      <section className="retention-grid">
-        <DashboardPanel title="Recent Analyses" meta="Local browser">
-          {stats.recentDeals.length > 0 ? (
-            stats.recentDeals.map((deal) => (
-              <p key={deal.id}>{deal.name} · {formatMoney(deal.metrics.monthlyCashflow)} monthly cashflow</p>
-            ))
-          ) : (
-            <EmptyLine text="No recent saved analyses yet. Open a module and save your first scenario." />
-          )}
-        </DashboardPanel>
-        <DashboardPanel title="Saved Scenarios" meta="Compare framework">
-          <EmptyLine text="Scenario comparison is prepared for Pro. Saved BRRR deals already appear inside the analyzer." />
-        </DashboardPanel>
-        <DashboardPanel title="Investor Notes" meta="Coming soon">
-          <EmptyLine text="A lightweight notes layer will help capture assumptions, broker feedback and due-diligence tasks." />
-        </DashboardPanel>
-        <DashboardPanel title="Future Watchlist" meta="Premium">
-          <EmptyLine text="Track target areas, target yields and deals to revisit when pricing changes." />
-        </DashboardPanel>
+      <section className="workspace-panel glass-card">
+        <SectionHeading
+          label="Workspace"
+          title="Return to your investment workflow"
+          copy="Recent analyses, saved deals, notes and watchlist items are grouped into one calm operating view."
+        />
+        <div className="workspace-grid">
+          <DashboardPanel title="Recent Analyses" meta="Local browser">
+            {stats.recentDeals.length > 0 ? (
+              stats.recentDeals.map((deal) => (
+                <p key={deal.id}>{deal.name} · {formatMoney(deal.metrics.monthlyCashflow)} monthly cashflow</p>
+              ))
+            ) : (
+              <EmptyLine text="No recent saved analyses yet. Open a module and save your first scenario." />
+            )}
+          </DashboardPanel>
+          <DashboardPanel title="Saved Deals" meta={`${stats.savedScenarios} saved`}>
+            <EmptyLine text="Saved BRRR scenarios appear inside the analyzer today. Cross-module comparison is prepared for Pro." />
+          </DashboardPanel>
+          <DashboardPanel title="Watchlist" meta="Future">
+            <EmptyLine text="Track target areas, vendors, agents and deals to revisit when pricing changes." />
+          </DashboardPanel>
+          <DashboardPanel title="Investor Notes" meta="Future">
+            <EmptyLine text="Capture assumptions, viewing notes, broker feedback and due-diligence actions." />
+          </DashboardPanel>
+        </div>
       </section>
 
       <section className="upgrade-strip glass-card">
         <div>
-          <p className="eyebrow">Professional investor tools</p>
-          <h2>Upgrade pathways without blocking the core analyzer</h2>
-          <p>Free users can analyse deals today. Pro and Premium previews show where reports, comparison and portfolio workflows will expand next.</p>
+          <p className="eyebrow">Platform</p>
+          <h2>Free analysis today. Pro and Premium workflows next.</h2>
+          <p>PropertyIQ is structured around a Free / Pro / Premium ecosystem without blocking the core analyzers.</p>
         </div>
         <div className="hero-actions">
-          <Link className="primary-link" to="/professional-tools">View Pro Tools</Link>
-          <Link className="secondary-link" to="/operating-system">Premium Roadmap</Link>
+          <Link className="primary-link" to="/platform">View Platform</Link>
+          <Link className="secondary-link" to="/roadmap">Roadmap</Link>
         </div>
       </section>
     </main>
@@ -838,6 +870,7 @@ function BrrrAnalyzerPage() {
   const health = getBrrrHealth(metrics);
   const benchmarks = getBrrrBenchmarks(metrics);
   const insightCards = getBrrrInsightCards(metrics, inputs);
+  const signatureVerdict = getSignatureVerdict('BRRR', metrics, health);
 
   return (
     <main className="page analyzer-page">
@@ -896,6 +929,7 @@ function BrrrAnalyzerPage() {
         </div>
 
         <div className="side-stack">
+          <AIVerdictPanel verdict={signatureVerdict} />
           <DecisionPanel health={health} healthSummary={metrics.healthSummary} verdict={metrics.verdict} benchmarks={benchmarks} insights={insightCards} />
           <div className="panel">
             <PanelHeading label="Sensitivity" title="Rate and Rent Stress Test" meta="Live" />
@@ -1025,6 +1059,7 @@ function AirbnbAnalyzerPage() {
 
   const health = getAirbnbHealth(metrics);
   const insights = getAirbnbInsights(metrics);
+  const signatureVerdict = getSignatureVerdict('Airbnb', metrics, health);
 
   return (
     <main className="page analyzer-page">
@@ -1078,6 +1113,7 @@ function AirbnbAnalyzerPage() {
         </div>
 
         <div className="side-stack">
+          <AIVerdictPanel verdict={signatureVerdict} />
           <DecisionPanel
             health={health}
             healthSummary={metrics.healthSummary}
@@ -1132,6 +1168,69 @@ function ProfessionalToolsPage() {
       </section>
 
       <DealComparisonPreview />
+    </main>
+  );
+}
+
+function PlatformPage() {
+  return (
+    <main className="page platform-page">
+      <section className="page-hero compact">
+        <p className="eyebrow">PropertyIQ Platform</p>
+        <h1>The Investor Operating System</h1>
+        <p>A calm, professional workspace for analysing opportunities, comparing strategies, storing deal evidence and preparing for portfolio growth.</p>
+      </section>
+
+      <section className="platform-section glass-card">
+        <div>
+          <p className="eyebrow">Pro</p>
+          <h2>Become a Faster Investor</h2>
+          <p>Professional decision tools designed to help investors analyse opportunities with greater confidence.</p>
+        </div>
+        <div className="premium-preview-grid">
+          <PremiumPreview title="AI Investor Verdicts" copy="Concise commentary that explains what the numbers mean." />
+          <PremiumPreview title="Deal Health Checks" copy="Strengths, risks and opportunities from underwriting outputs." />
+          <PremiumPreview title="Sensitivity Analysis" copy="Stress-test key assumptions before committing capital." />
+          <PremiumPreview title="Strategy Comparison" copy="Compare BRRR, Airbnb and BTL in a single decision view." />
+          <PremiumPreview title="Unlimited Saved Deals" copy="Build a larger pipeline of opportunities and scenarios." />
+          <PremiumPreview title="PDF Investment Reports" copy="Prepare lender, partner and internal review packs." />
+          <PremiumPreview title="Advanced Scenario Testing" copy="Model downside and upside cases with clean assumptions." />
+        </div>
+      </section>
+
+      <section className="platform-section glass-card">
+        <div>
+          <p className="eyebrow">Premium</p>
+          <h2>Build Your Investment Operating System</h2>
+          <p>Manage opportunities, acquisitions and portfolio performance from a single workspace.</p>
+        </div>
+        <div className="premium-preview-grid">
+          <PremiumPreview title="Portfolio Tracker" copy="Monitor assets, cashflow, equity and yield." />
+          <PremiumPreview title="Deal Pipeline" copy="Track acquisition stages from sourced to completed." />
+          <PremiumPreview title="Growth Forecasting" copy="Model portfolio expansion and reinvestment capacity." />
+          <PremiumPreview title="Deal Vault" copy="Store deals, notes, reports, assumptions and scenarios." />
+          <PremiumPreview title="Investor CRM" copy="Manage brokers, agents, sourcers, lenders and partners." />
+          <PremiumPreview title="Marketplace Access" copy="Prepare for trusted services and partner tools." />
+          <PremiumPreview title="Team Collaboration" copy="Future shared workspaces for teams and partners." />
+        </div>
+      </section>
+
+      <RoadmapBlock />
+      <StrategyComparisonPreview />
+      <DealVaultPreview />
+    </main>
+  );
+}
+
+function RoadmapPage() {
+  return (
+    <main className="page roadmap-page">
+      <section className="page-hero compact">
+        <p className="eyebrow">Roadmap</p>
+        <h1>From calculators to operating system</h1>
+        <p>The platform roadmap is structured around the repeat investor workflow: analyse, compare, store, track and grow.</p>
+      </section>
+      <RoadmapBlock />
     </main>
   );
 }
@@ -1234,6 +1333,32 @@ function ScenarioToggle({ scenario, setScenario }) {
   );
 }
 
+function AIVerdictPanel({ verdict }) {
+  return (
+    <div className="panel ai-verdict-panel">
+      <PanelHeading label="AI Investor Verdict" title="Decision Summary" meta="Preview" />
+      <div className="verdict-box">
+        <span>Verdict</span>
+        <p>{verdict.verdict}</p>
+      </div>
+      <div className="verdict-grid">
+        <div>
+          <span>Main Strength</span>
+          <p>{verdict.mainStrength}</p>
+        </div>
+        <div>
+          <span>Main Risk</span>
+          <p>{verdict.mainRisk}</p>
+        </div>
+        <div>
+          <span>Best Use Case</span>
+          <p>{verdict.bestUseCase}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DecisionPanel({ health, healthSummary = [], verdict, benchmarks, insights }) {
   return (
     <div className="panel decision-panel">
@@ -1316,6 +1441,87 @@ function SaveCompareFramework() {
         <small>Export report · Pro</small>
       </div>
     </div>
+  );
+}
+
+function PremiumPreview({ title, copy }) {
+  return (
+    <article className="premium-preview-card">
+      <span>Future upgrade</span>
+      <h3>{title}</h3>
+      <p>{copy}</p>
+    </article>
+  );
+}
+
+function RoadmapBlock() {
+  return (
+    <section className="roadmap-block glass-card">
+      <SectionHeading
+        label="Roadmap"
+        title="Now, next and future"
+        copy="A transparent path from active calculators to a full property investment operating system."
+      />
+      <div className="roadmap-columns">
+        <RoadmapColumn title="Now" items={['BRRR Analyzer', 'Airbnb Analyzer', 'Saved deals', 'Scenario testing']} />
+        <RoadmapColumn title="Next" items={['Strategy Comparison', 'AI Verdict', 'Deal Vault', 'PDF Reports']} />
+        <RoadmapColumn title="Future" items={['Portfolio Tracker', 'Marketplace', 'CRM', 'Growth Forecasting']} />
+      </div>
+    </section>
+  );
+}
+
+function RoadmapColumn({ title, items }) {
+  return (
+    <article>
+      <h3>{title}</h3>
+      {items.map((item) => <span key={item}>{item}</span>)}
+    </article>
+  );
+}
+
+function StrategyComparisonPreview() {
+  return (
+    <section className="comparison-preview glass-card">
+      <SectionHeading
+        label="Strategy comparison"
+        title="Which strategy wins?"
+        copy="A future-ready comparison engine for BRRR, Airbnb and BTL using the same investor-grade categories."
+      />
+      <div className="strategy-table">
+        <div><strong>Strategy</strong><strong>Monthly Profit</strong><strong>Yield</strong><strong>ROI</strong><strong>Capital Left In</strong><strong>Risk Level</strong></div>
+        <div><span>BRRR</span><span>From analyzer</span><span>Live</span><span>Live</span><span>Live</span><span>Moderate</span></div>
+        <div><span>Airbnb</span><span>From analyzer</span><span>Live</span><span>Estimate</span><span>N/A</span><span>Higher ops</span></div>
+        <div><span>BTL</span><span>Baseline</span><span>Estimate</span><span>Estimate</span><span>N/A</span><span>Lower ops</span></div>
+      </div>
+    </section>
+  );
+}
+
+function DealVaultPreview() {
+  return (
+    <section className="deal-vault glass-card">
+      <SectionHeading
+        label="Deal Vault"
+        title="Store the investment evidence"
+        copy="The Deal Vault is prepared to hold saved deals, investor notes, scenarios and reports as the platform grows."
+      />
+      <div className="vault-grid">
+        <EmptyVaultItem title="Saved Deals" copy="Analyzer saves already create the foundation for this vault." />
+        <EmptyVaultItem title="Notes" copy="Future notes will capture assumptions, calls, viewings and diligence." />
+        <EmptyVaultItem title="Scenarios" copy="Conservative, expected and optimistic cases will be stored together." />
+        <EmptyVaultItem title="Reports" copy="PDF investment reports are planned as a Pro workflow." />
+      </div>
+    </section>
+  );
+}
+
+function EmptyVaultItem({ title, copy }) {
+  return (
+    <article className="vault-item">
+      <h3>{title}</h3>
+      <p>{copy}</p>
+    </article>
   );
 }
 
