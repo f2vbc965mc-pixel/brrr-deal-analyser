@@ -15,6 +15,7 @@ const CLOUD_SYNC_ENABLED = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 
 const initialInputs = {
   purchasePrice: '180000',
+  currentMarketValue: '200000',
   refurbCost: '25000',
   legalFees: '2500',
   stampDutyEstimate: '',
@@ -28,6 +29,7 @@ const initialInputs = {
 
 const brrrFields = [
   { name: 'purchasePrice', label: 'Purchase price', prefix: '£', helper: 'Acquisition price before refurbishment and fees.', group: 'Purchase', max: 10000000 },
+  { name: 'currentMarketValue', label: 'Current market value', prefix: '£', helper: 'Optional market value today, used to estimate BMV discount.', group: 'Purchase', max: 10000000 },
   { name: 'refurbCost', label: 'Refurb cost', prefix: '£', helper: 'Estimated works required before refinance.', group: 'Purchase', max: 3000000 },
   { name: 'legalFees', label: 'Legal / buying costs', prefix: '£', helper: 'Solicitor, broker, valuation and transaction costs.', group: 'Purchase', max: 250000 },
   { name: 'stampDutyEstimate', label: 'Stamp duty estimate', prefix: '£', helper: 'Optional override. Leave empty to use the built-in estimate.', group: 'Purchase', max: 2000000 },
@@ -165,18 +167,18 @@ function getDealRating(metrics) {
   if (metrics.grossYield < 4.5) score = Math.min(score, 58);
 
   if (score >= 82) {
-    return { tone: 'strong', label: 'Excellent', score, feedback: 'Strong cashflow, efficient refinance recovery and attractive income return.' };
+    return { tone: 'excellent', label: 'Excellent', score, feedback: 'Exceptional BRRR characteristics: strong cashflow, return, equity creation and capital recycling.' };
   }
   if (score >= 68) {
-    return { tone: 'strong', label: 'Good', score, feedback: 'A good candidate if valuation, rent and finance assumptions are independently verified.' };
+    return { tone: 'good', label: 'Good', score, feedback: 'Solid investment opportunity if valuation, rent and finance assumptions are independently verified.' };
   }
   if (score >= 50) {
-    return { tone: 'borderline', label: 'Average', score, feedback: 'Workable on some metrics, but not strong enough to progress without careful diligence.' };
+    return { tone: 'average', label: 'Average', score, feedback: 'Viable but requires careful review of the weaker assumptions before offer stage.' };
   }
   if (score >= 34) {
-    return { tone: 'risk', label: 'Weak', score, feedback: 'Weak risk-adjusted profile based on cashflow, yield or capital recycling.' };
+    return { tone: 'weak', label: 'Weak', score, feedback: 'Marginal returns based on cashflow, yield, capital recycling or equity creation.' };
   }
-  return { tone: 'risk', label: 'Poor', score, feedback: 'Poor candidate under the current assumptions.' };
+  return { tone: 'poor', label: 'Poor', score, feedback: 'Fails key investment criteria under the current assumptions.' };
 }
 
 function getDealVerdict(metrics) {
@@ -636,9 +638,9 @@ function getAirbnbHealth(metrics) {
   else risks.push('Short-term rental assumptions do not currently produce positive profit.');
 
   if (metrics.compareAgainstBtl) {
-    if (metrics.monthlyDifference > 150) strengths.push('Airbnb outperforms the long-term rental baseline on monthly profit.');
+    if (metrics.monthlyDifference > 150) strengths.push('Serviced accommodation outperforms the long-term rental baseline on monthly profit.');
     else if (metrics.monthlyDifference < -150) risks.push('Long-term rent appears safer or stronger under these assumptions.');
-    else opportunities.push('Airbnb and BTL are close enough that regulation, workload and seasonality may decide the strategy.');
+    else opportunities.push('SA and BTL are close enough that regulation, workload and seasonality may decide the strategy.');
   }
 
   if (metrics.paybackMonths > 0 && metrics.paybackMonths <= 18) strengths.push('Setup cost payback is within a relatively short operating period.');
@@ -668,7 +670,7 @@ function getAirbnbInsights(metrics) {
     },
     {
       title: 'Risk insight',
-      copy: 'Airbnb returns are highly sensitive to regulation, seasonality, reviews and operator quality.',
+      copy: 'SA returns are highly sensitive to regulation, seasonality, reviews and operator quality.',
     },
   ];
 }
@@ -676,7 +678,7 @@ function getAirbnbInsights(metrics) {
 function getAirbnbRecommendation(metrics) {
   if (!metrics.compareAgainstBtl) {
     return {
-      label: 'Standalone Airbnb Review',
+      label: 'Standalone SA Review',
       tone: 'borderline',
       confidence: metrics.breakEvenOccupancy <= 60 ? 'Medium' : 'Low',
       reasoning: 'BTL comparison is switched off. Review Airbnb profit, occupancy resilience and local regulation as a standalone operating model.',
@@ -690,7 +692,7 @@ function getAirbnbRecommendation(metrics) {
   const confidence = occupancyRisk || highCostRisk ? 'Medium' : Math.abs(difference) >= 350 ? 'High' : 'Medium';
   const reasonParts = [];
 
-  if (difference >= 0) reasonParts.push(`Airbnb is ahead by ${formatMoney(difference)} per month before tax.`);
+  if (difference >= 0) reasonParts.push(`SA is ahead by ${formatMoney(difference)} per month before tax.`);
   else reasonParts.push(`BTL is ahead by ${formatMoney(Math.abs(difference))} per month before tax.`);
   if (occupancyRisk) reasonParts.push('The result is sensitive to occupancy, so local demand needs evidence.');
   if (highCostRisk) reasonParts.push('Operating costs absorb a high share of revenue.');
@@ -699,10 +701,10 @@ function getAirbnbRecommendation(metrics) {
   let label = 'Roughly Equal';
   let tone = 'borderline';
   if (difference >= 500) {
-    label = 'Strong Airbnb Advantage';
+    label = 'Strong SA Advantage';
     tone = 'strong';
   } else if (difference >= 150) {
-    label = 'Moderate Airbnb Advantage';
+    label = 'Moderate SA Advantage';
     tone = 'strong';
   } else if (difference <= -500) {
     label = 'Strong BTL Advantage';
@@ -725,7 +727,7 @@ function getBrrrHealthSummary(metrics) {
     {
       label: 'Yield',
       status: metrics.grossYield >= 7 ? 'Strong' : metrics.grossYield >= 5 ? 'Moderate' : 'Weak',
-      explanation: 'Measured against gross rent and purchase price as a property performance screen.',
+      explanation: 'Gross yield is measured against annual rent and purchase price as a property performance screen.',
     },
     {
       label: 'Refinance Position',
@@ -786,9 +788,9 @@ function getSignatureVerdict(strategy, metrics, health) {
         ? 'BRRR, if the post-refurb valuation and lending terms are independently confirmed.'
         : 'BTL or a longer hold may be more appropriate unless the refinance position improves.'
       : !metrics.compareAgainstBtl
-        ? 'Airbnb standalone review, because BTL comparison is switched off.'
+        ? 'Serviced accommodation standalone review, because BTL comparison is switched off.'
         : metrics.monthlyDifference >= 150
-          ? 'Airbnb, if local demand, regulation and management capacity are validated.'
+          ? 'Serviced accommodation, if local demand, regulation and management capacity are validated.'
           : metrics.monthlyDifference <= -150
             ? 'BTL, because the simpler rental baseline currently looks safer.'
             : 'No clear winner; compare operational workload, regulation and financing risk.';
@@ -817,7 +819,7 @@ function getSignatureVerdict(strategy, metrics, health) {
           metrics.returnOnTotalCapitalInvested >= 4 ? 'Return on total capital invested is based on income rather than refinance uplift.' : 'Income return is modest relative to total cash deployed.',
         ]
       : [
-          metrics.airbnbYield >= 8 ? 'Airbnb yield appears strong, but only if occupancy is achievable.' : 'Airbnb yield is not yet strong enough to ignore the BTL baseline.',
+          metrics.airbnbYield >= 8 ? 'SA yield appears strong, but only if occupancy is achievable.' : 'SA yield is not yet strong enough to ignore the BTL baseline.',
           metrics.breakEvenOccupancy <= 60 ? 'Break-even occupancy gives some operating buffer.' : 'The model depends on sustained occupancy and strong operations.',
         ],
     recommendations,
@@ -848,7 +850,7 @@ function getBrrrStrategyComparison(metrics) {
       score: metrics.monthlyCashflow + metrics.returnOnTotalCapitalInvested * 45 - metrics.cashLeftInDeal / 1200,
     },
     {
-      strategy: 'Airbnb',
+      strategy: 'SA',
       monthlyProfit: null,
       yield: null,
       roi: null,
@@ -882,7 +884,7 @@ function getAirbnbStrategyComparison(metrics) {
       score: -Infinity,
     },
     {
-      strategy: 'Airbnb',
+      strategy: 'SA',
       monthlyProfit: metrics.monthlyProfit,
       yield: metrics.airbnbYield,
       roi: metrics.airbnbYield,
@@ -923,6 +925,7 @@ function createBrrrReport(inputs, metrics, verdict, comparison) {
     '',
     'Inputs',
     `Purchase price: ${formatMoney(toNumber(inputs.purchasePrice))}`,
+    `Current market value: ${formatMoney(toNumber(inputs.currentMarketValue))}`,
     `Refurb cost: ${formatMoney(toNumber(inputs.refurbCost))}`,
     `Post-refurb value / ARV: ${formatMoney(toNumber(inputs.refinanceValue))}`,
     `Expected monthly rent: ${formatMoney(toNumber(inputs.monthlyRent))}`,
@@ -941,6 +944,7 @@ function createBrrrReport(inputs, metrics, verdict, comparison) {
     `Return on total capital invested: ${formatPercent(metrics.returnOnTotalCapitalInvested)}`,
     `BRRR cash-on-cash return: ${metrics.brrrCashOnCashReturn === null ? 'Capital Fully Recycled' : formatPercent(metrics.brrrCashOnCashReturn)}`,
     `Equity created: ${formatMoney(metrics.equityCreated)}`,
+    `Discount to market value: ${formatPercent(metrics.discountToMarketValue)}`,
     '',
     'Investor Verdict',
     `Overall verdict: ${verdict.overallVerdict}`,
@@ -961,6 +965,7 @@ function createBrrrReport(inputs, metrics, verdict, comparison) {
 function createBrrrReportHtml(inputs, metrics, verdict, comparison, dealName) {
   const rows = [
     ['Purchase price', formatMoney(toNumber(inputs.purchasePrice))],
+    ['Current market value', formatMoney(toNumber(inputs.currentMarketValue))],
     ['Refurb cost', formatMoney(toNumber(inputs.refurbCost))],
     ['Post-refurb value / ARV', formatMoney(toNumber(inputs.refinanceValue))],
     ['Expected monthly rent', formatMoney(toNumber(inputs.monthlyRent))],
@@ -973,6 +978,7 @@ function createBrrrReportHtml(inputs, metrics, verdict, comparison, dealName) {
     ['Return on total capital invested', formatPercent(metrics.returnOnTotalCapitalInvested)],
     ['BRRR cash-on-cash return', metrics.brrrCashOnCashReturn === null ? 'Capital Fully Recycled' : formatPercent(metrics.brrrCashOnCashReturn)],
     ['Equity created', formatMoney(metrics.equityCreated)],
+    ['Discount to market value', formatPercent(metrics.discountToMarketValue)],
   ];
 
   return `<!doctype html>
@@ -1130,7 +1136,7 @@ function Shell() {
             BRRR
           </NavLink>
           <NavLink to="/airbnb" onClick={() => setMenuOpen(false)}>
-            Airbnb
+            SA
           </NavLink>
           <NavLink to="/platform" onClick={() => setMenuOpen(false)}>
             Platform
@@ -1183,7 +1189,7 @@ function LandingPage() {
           <p className="eyebrow">Premium property investment software</p>
           <h1>Analyse Property Deals Like a Professional Investor</h1>
           <p className="hero-subtitle">
-            Calculate BRRR and Airbnb opportunities, compare investments, track your pipeline and manage your growing portfolio from one platform.
+            Calculate BRRR and serviced accommodation opportunities, compare investments, track your pipeline and manage your growing portfolio from one platform.
           </p>
 
           <div className="hero-actions">
@@ -1234,8 +1240,8 @@ function LandingPage() {
             copy="Analyse purchase, refurb, refinance and cashflow with total capital return and capital-left-in metrics."
           />
           <FeatureCard
-            title="Airbnb Comparison"
-            copy="Compare short-term rental profit against long-term rent with occupancy and operating cost assumptions."
+            title="Serviced Accommodation Comparison"
+            copy="Compare Airbnb, Booking.com and short-term rental profit against long-term rent."
             status="Early Access"
           />
           <FeatureCard
@@ -1267,11 +1273,17 @@ function LandingPage() {
         />
         <div className="premium-preview-grid">
           <PremiumPreview label="Pro" title="AI Investor Verdicts" copy="Turn metrics into concise strengths, risks and recommended next steps." />
+          <PremiumPreview label="Pro" title="HMO Analyzer" copy="A future underwriting module for room-by-room income, licensing risk and operating costs." />
+          <PremiumPreview label="Pro" title="Flip Analyzer" copy="A future resale model for refurb margin, holding costs and profit sensitivity." />
           <PremiumPreview label="Pro" title="Advanced Sensitivity Analysis" copy="Stress-test valuation, rent, interest rates and occupancy before offer stage." />
-          <PremiumPreview label="Pro" title="Strategy Comparison" copy="Compare BRRR, Airbnb and BTL using return, cashflow, capital and risk." />
+          <PremiumPreview label="Pro" title="Strategy Comparison" copy="Compare BRRR, SA and BTL using return, cashflow, capital and risk." />
           <PremiumPreview label="Pro" title="PDF Reports" copy="Create decision records for your own file, partners, lenders or brokers." />
+          <PremiumPreview label="Pro" title="Unlimited Saved Deals" copy="Build a larger deal vault without losing assumptions, notes or scenarios." />
           <PremiumPreview label="Premium" title="Acquisition Pipeline" copy="Manage opportunities from lead to purchased without losing context." />
           <PremiumPreview label="Premium" title="Portfolio Tracking" copy="Track rent, equity and growth once deals become owned assets." />
+          <PremiumPreview label="Premium" title="Investor CRM" copy="Manage agents, brokers, solicitors, builders and partners around the acquisition workflow." />
+          <PremiumPreview label="Premium" title="Marketplace Access" copy="A future route to data partners, integrations and vetted opportunity sources." />
+          <PremiumPreview label="Premium" title="Team Features" copy="Future collaboration tools once accounts, billing and permissions are live." />
         </div>
       </section>
 
@@ -1339,10 +1351,10 @@ function DashboardPage() {
       active: true,
     },
     {
-      title: 'Airbnb Analyzer',
+      title: 'Serviced Accommodation',
       status: 'Early Access',
-      copy: 'Compare short-term rental profit against long-term rent.',
-      action: 'Open Airbnb Analyzer',
+      copy: 'Compare Airbnb, Booking.com and short-term rental profit against long-term rent.',
+      action: 'Open SA Analyzer',
       to: '/airbnb',
       active: true,
     },
@@ -1410,7 +1422,7 @@ function DashboardPage() {
           copy="The core AcquiraIQ journey is simple: analyse a deal, save the opportunity, move it into Pipeline and add it to Portfolio if purchased."
         />
         <div className="checklist-grid">
-          <ChecklistItem done={stats.dealsAnalysed > 0} title="Analyse deal" copy="Use BRRR or Airbnb to model the opportunity." />
+          <ChecklistItem done={stats.dealsAnalysed > 0} title="Analyse deal" copy="Use BRRR or serviced accommodation to model the opportunity." />
           <ChecklistItem done={stats.vaultItems > 0} title="Save opportunity" copy="Name the deal and store notes in Deal Vault." />
           <ChecklistItem done={stats.pipelineDeals > 0} title="Move to pipeline" copy="Progress one opportunity through stages." />
           <ChecklistItem done={stats.portfolioProperties > 0} title="Add to portfolio" copy="Track a purchased or live property." />
@@ -1451,7 +1463,7 @@ function DashboardPage() {
                 <p key={deal.id}>{deal.name} · {formatMoney(deal.metric)} {deal.metricLabel}</p>
               ))
             ) : (
-              <EmptyLine text="No saved deals yet. Analyse your first BRRR or Airbnb opportunity to begin building your deal vault." />
+              <EmptyLine text="No saved deals yet. Analyse your first BRRR or serviced accommodation opportunity to begin building your deal vault." />
             )}
           </DashboardPanel>
           <DashboardPanel title="Deal Vault" meta={`${stats.vaultItems} items`}>
@@ -1535,6 +1547,7 @@ function BrrrAnalyzerPage() {
   const metrics = useMemo(() => {
     const baseValues = {
       purchasePrice: toNumber(inputs.purchasePrice),
+      currentMarketValue: toNumber(inputs.currentMarketValue),
       refurbCost: toNumber(inputs.refurbCost),
       monthlyRent: toNumber(inputs.monthlyRent),
       interestRate: toNumber(inputs.interestRate),
@@ -1545,7 +1558,7 @@ function BrrrAnalyzerPage() {
       voidAllowance: toNumber(inputs.voidAllowance),
     };
     const adjustedValues = applyBrrrScenario(baseValues, scenario);
-    const { purchasePrice, refurbCost, monthlyRent, interestRate, loanToValue, refinanceValue, legalFees } = adjustedValues;
+    const { purchasePrice, currentMarketValue, refurbCost, monthlyRent, interestRate, loanToValue, refinanceValue, legalFees } = adjustedValues;
     const calculatedStampDuty = calculateStampDuty(purchasePrice);
     const stampDuty = inputs.stampDutyEstimate === '' ? calculatedStampDuty : toNumber(inputs.stampDutyEstimate);
     const monthlyRunningCosts = adjustedValues.monthlyRunningCosts;
@@ -1560,12 +1573,14 @@ function BrrrAnalyzerPage() {
     const monthlyCashflow = effectiveMonthlyRent - monthlyRunningCosts - monthlyMortgage;
     const annualCashflow = monthlyCashflow * 12;
     const grossYield = purchasePrice > 0 ? ((monthlyRent * 12) / purchasePrice) * 100 : 0;
-    const annualNetRentBeforeFinance = (effectiveMonthlyRent - monthlyRunningCosts) * 12;
-    const netYield = purchasePrice > 0 ? (annualNetRentBeforeFinance / purchasePrice) * 100 : 0;
+    const annualNetOperatingIncome = (effectiveMonthlyRent - monthlyRunningCosts) * 12;
+    const netYield = totalCashInvested > 0 ? (annualNetOperatingIncome / totalCashInvested) * 100 : 0;
     const cashLeftInDeal = Math.max(totalCashInvested - refinanceLoan, 0);
     const returnOnTotalCapitalInvested = totalCashInvested > 0 ? (annualCashflow / totalCashInvested) * 100 : 0;
     const brrrCashOnCashReturn = cashLeftInDeal > 0 ? (annualCashflow / cashLeftInDeal) * 100 : null;
     const equityCreated = refinanceValue - totalProjectCost;
+    const marketValueForDiscount = currentMarketValue || purchasePrice;
+    const discountToMarketValue = marketValueForDiscount > 0 ? ((marketValueForDiscount - purchasePrice) / marketValueForDiscount) * 100 : 0;
     const refinanceStrength = totalCashInvested > 0 ? (refinanceLoan / totalCashInvested) * 100 : 0;
     const breakEvenRent = (1 - voidAllowance / 100) > 0 ? (monthlyMortgage + monthlyRunningCosts) / (1 - voidAllowance / 100) : 0;
     const breakEvenRefinanceValue = loanToValue > 0 ? totalCashInvested / (loanToValue / 100) : 0;
@@ -1590,13 +1605,14 @@ function BrrrAnalyzerPage() {
       scenario,
       stampDuty,
       calculatedStampDuty,
+      currentMarketValue: marketValueForDiscount,
       totalCashInvested,
       totalProjectCost,
       refinanceLoan,
       monthlyMortgage,
       monthlyCashflow,
       annualCashflow,
-      annualNetRentBeforeFinance,
+      annualNetOperatingIncome,
       grossYield,
       netYield,
       cashLeftInDeal,
@@ -1604,6 +1620,7 @@ function BrrrAnalyzerPage() {
       returnOnTotalCapitalInvested,
       brrrCashOnCashReturn,
       equityCreated,
+      discountToMarketValue,
       refinanceStrength,
       monthlyRunningCosts,
       voidLoss,
@@ -1822,16 +1839,18 @@ function BrrrAnalyzerPage() {
               </div>
               <div className="metric-list compact">
                 <Result label="Total Cash Invested" value={formatMoney(metrics.totalCashInvested)} />
+                <Result label="Current Market Value" value={formatMoney(metrics.currentMarketValue)} note="Optional market value today, before refurbishment." />
                 <Result label="Refinance Loan Estimate" value={formatMoney(metrics.refinanceLoan)} />
                 <Result label="Total Capital Left In Deal" value={formatMoney(metrics.cashLeftInDeal)} note="Capital still tied up after estimated refinance proceeds." highlight />
                 <Result label="Monthly Mortgage Payment" value={formatMoney(metrics.monthlyMortgage)} />
                 <Result label="Monthly Cashflow" value={formatMoney(metrics.monthlyCashflow)} highlight />
                 <Result label="Annual Cashflow" value={formatMoney(metrics.annualCashflow)} />
                 <Result label="Gross Yield" value={formatPercent(metrics.grossYield)} note="Annual gross rent divided by purchase price." />
-                <Result label="Net Yield" value={formatPercent(metrics.netYield)} note="Effective annual rent after voids and running costs, divided by purchase price. Mortgage is excluded." />
+                <Result label="Net Yield" value={formatPercent(metrics.netYield)} note="Annual net operating income divided by total capital invested. Mortgage is excluded." />
                 <Result label="Return on Total Capital Invested" value={formatPercent(metrics.returnOnTotalCapitalInvested)} note="Annual cashflow divided by purchase, refurb, stamp duty and buying costs." highlight />
                 <Result label="BRRR Cash-on-Cash Return" value={metrics.brrrCashOnCashReturn === null ? 'Capital Fully Recycled' : formatPercent(metrics.brrrCashOnCashReturn)} note="Annual cashflow divided by cash left in the deal after refinance." />
                 <Result label="Equity Created" value={formatMoney(metrics.equityCreated)} note="Post-refurb value less total project cost." />
+                <Result label="Discount To Market Value" value={formatPercent(metrics.discountToMarketValue)} note="Current market value less purchase price, divided by current market value." />
                 <Result label="Refinance Strength" value={formatPercent(metrics.refinanceStrength)} note="Estimated refinance loan compared with total capital invested." />
               </div>
             </div>
@@ -1911,7 +1930,7 @@ function AirbnbAnalyzerPage() {
   const [scenario, setScenario] = useState('expected');
   const [activeTab, setActiveTab] = useState('overview');
   const [compareAgainstBtl, setCompareAgainstBtl] = useState(true);
-  const [dealName, setDealName] = useState(createDefaultDealName({ purchasePrice: initialAirbnbInputs.purchasePrice }, 'Airbnb'));
+  const [dealName, setDealName] = useState(createDefaultDealName({ purchasePrice: initialAirbnbInputs.purchasePrice }, 'SA'));
   const [dealNote, setDealNote] = useState('');
   const [vaultItems, setVaultItems] = useState(loadDealVault);
   const [noteDraft, setNoteDraft] = useState('');
@@ -2038,7 +2057,7 @@ function AirbnbAnalyzerPage() {
       route: '/airbnb',
       scenario,
       dealName,
-      strategy: 'Airbnb',
+      strategy: 'Serviced Accommodation',
       inputs: { ...inputs },
       metrics: { ...metrics },
     };
@@ -2047,7 +2066,7 @@ function AirbnbAnalyzerPage() {
   }
 
   function saveCurrentDeal() {
-    const cleanName = dealName.trim() || createDefaultDealName({ purchasePrice: inputs.purchasePrice }, 'Airbnb');
+    const cleanName = dealName.trim() || createDefaultDealName({ purchasePrice: inputs.purchasePrice }, 'SA');
     saveVault([
       {
         id: crypto.randomUUID(),
@@ -2061,7 +2080,7 @@ function AirbnbAnalyzerPage() {
         notes: dealNote.trim(),
         inputs: { ...inputs },
         metrics: { ...metrics },
-        strategy: 'Airbnb',
+        strategy: 'Serviced Accommodation',
       },
       ...vaultItems,
     ]);
@@ -2071,15 +2090,15 @@ function AirbnbAnalyzerPage() {
   function saveScenario() {
     addVaultItem(
       'Scenario',
-      `${dealName.trim() || createDefaultDealName({ purchasePrice: inputs.purchasePrice }, 'Airbnb')} · ${scenario[0].toUpperCase()}${scenario.slice(1)}`,
-      `${formatMoney(metrics.monthlyProfit)} monthly profit · ${formatPercent(metrics.airbnbYield)} Airbnb yield`,
+      `${dealName.trim() || createDefaultDealName({ purchasePrice: inputs.purchasePrice }, 'SA')} · ${scenario[0].toUpperCase()}${scenario.slice(1)}`,
+      `${formatMoney(metrics.monthlyProfit)} monthly profit · ${formatPercent(metrics.airbnbYield)} SA yield`,
     );
   }
 
   function addNote() {
     const note = noteDraft.trim();
     if (!note) return;
-    addVaultItem('Note', 'Airbnb investor note', note);
+    addVaultItem('Note', 'SA investor note', note);
     setNoteDraft('');
   }
 
@@ -2097,8 +2116,8 @@ function AirbnbAnalyzerPage() {
       <section className="module-header">
         <div>
           <p className="eyebrow">Early access module</p>
-          <h1>Airbnb Analyzer</h1>
-          <p>Compare short-term rental performance against a long-term rental baseline using clear occupancy assumptions.</p>
+          <h1>Serviced Accommodation Analyzer</h1>
+          <p>Analyse Airbnb, Booking.com and short-term rental opportunities against long-term rental performance.</p>
         </div>
         <div className="module-header-actions">
           {saveMessage && <span>{saveMessage}</span>}
@@ -2110,7 +2129,7 @@ function AirbnbAnalyzerPage() {
 
       <section className="summary-strip" aria-label="Airbnb summary">
         <SummaryCard label="Monthly Profit" value={formatMoney(metrics.monthlyProfit)} copy="After platform, management, bills, cleaning and finance costs." />
-        <SummaryCard label="Airbnb Yield" value={formatPercent(metrics.airbnbYield)} copy="Annual profit compared with property value." />
+        <SummaryCard label="SA Yield" value={formatPercent(metrics.airbnbYield)} copy="Annual profit compared with current market value." />
         <SummaryCard label="Monthly Difference vs BTL" value={compareAgainstBtl ? formatMoney(metrics.monthlyDifference) : 'Off'} copy="Difference versus long-term rental profit when comparison is enabled." />
       </section>
 
@@ -2118,10 +2137,10 @@ function AirbnbAnalyzerPage() {
         <div className="panel input-panel">
           <PanelHeading label="Inputs" title="Serviced Accommodation Assumptions" meta="Early access" />
           <DealIdentityForm dealName={dealName} setDealName={setDealName} dealNote={dealNote} setDealNote={setDealNote} />
-          <div className="comparison-toggle">
-            <button className={compareAgainstBtl ? 'scenario-button active' : 'scenario-button'} type="button" onClick={() => setCompareAgainstBtl(true)}>Compare Against BTL</button>
-            <button className={!compareAgainstBtl ? 'scenario-button active' : 'scenario-button'} type="button" onClick={() => setCompareAgainstBtl(false)}>No Comparison</button>
-          </div>
+          <label className="comparison-checkbox">
+            <input type="checkbox" checked={compareAgainstBtl} onChange={(event) => setCompareAgainstBtl(event.target.checked)} />
+            <span>Compare Against Long-Term Rental</span>
+          </label>
           <ScenarioToggle scenario={scenario} setScenario={setScenario} />
           <InputSections groupedFields={groupFields(airbnbFields)} inputs={inputs} updateInput={updateInput} />
         </div>
@@ -2142,11 +2161,11 @@ function AirbnbAnalyzerPage() {
                 <Result label="Current Market Value" value={formatMoney(metrics.currentMarketValue)} />
                 <Result label="Instant Equity" value={formatMoney(metrics.instantEquity)} note="Current market value less purchase price." />
                 <Result label="Discount to Market Value" value={formatPercent(metrics.discountToMarketValue)} note="Discount created by buying below estimated market value." />
-                <Result label="Estimated Gross Monthly Airbnb Revenue" value={formatMoney(metrics.grossMonthlyRevenue)} highlight />
+                <Result label="Estimated Gross Monthly SA Revenue" value={formatMoney(metrics.grossMonthlyRevenue)} highlight />
                 <Result label="Estimated Operating Costs" value={formatMoney(metrics.operatingCosts)} />
                 <Result label="Estimated Monthly Profit" value={formatMoney(metrics.monthlyProfit)} highlight />
                 <Result label="Estimated Annual Profit" value={formatMoney(metrics.annualProfit)} />
-                <Result label="Airbnb Yield" value={formatPercent(metrics.airbnbYield)} />
+                <Result label="SA Yield" value={formatPercent(metrics.airbnbYield)} />
                 <Result label="Payback Period on Setup Cost" value={formatMonths(metrics.paybackMonths)} />
                 {compareAgainstBtl && <Result label="Long-Term Rental Profit" value={formatMoney(metrics.btlProfit)} />}
                 {compareAgainstBtl && <Result label="Expected Monthly Difference" value={formatMoney(metrics.monthlyDifference)} highlight />}
@@ -2166,7 +2185,7 @@ function AirbnbAnalyzerPage() {
                   !compareAgainstBtl
                     ? 'BTL comparison is switched off, so the verdict focuses on standalone Airbnb operating risk.'
                     : metrics.monthlyDifference >= 0
-                    ? 'The Airbnb scenario outperforms the BTL baseline on profit, before considering extra workload and volatility.'
+                    ? 'The SA scenario outperforms the BTL baseline on profit, before considering extra workload and volatility.'
                     : 'The BTL baseline currently offers a stronger or safer monthly position.',
                 ]}
                 insights={insights}
@@ -2238,7 +2257,7 @@ function ProfessionalToolsPage() {
       </section>
 
       <section className="membership-grid">
-        <MembershipTier title="Free" badge="Current" items={['BRRR Analyzer', 'Airbnb Early Access', 'Saved deals in browser']} />
+        <MembershipTier title="Free" badge="Current" items={['BRRR Analyzer', 'SA Early Access', 'Saved deals in browser']} />
         <MembershipTier title="Pro" badge="Preview" items={['Unlimited saved deals', 'PDF reports', 'Advanced deal comparison']} />
         <MembershipTier title="Premium" badge="Roadmap" items={['Operating system', 'Portfolio tracker', 'Investor CRM']} />
       </section>
@@ -2273,7 +2292,7 @@ function PlatformPage() {
           <PremiumPreview label="Pro preview" title="Advanced Investor Verdict" copy="A second-opinion layer that explains cashflow, refinance risk, suitability and next actions in plain investor language." />
           <PremiumPreview label="Pro preview" title="Scenario Testing" copy="Stress-test conservative, expected and optimistic cases before relying on a headline return." />
           <PremiumPreview label="Pro preview" title="Advanced Sensitivity Analysis" copy="See how rent, rates, GDV and occupancy changes affect the decision before offer stage." />
-          <PremiumPreview label="Pro preview" title="Strategy Comparison" copy="Compare BRRR, Airbnb and BTL side by side with a recommended strategy and risk context." />
+          <PremiumPreview label="Pro preview" title="Strategy Comparison" copy="Compare BRRR, SA and BTL side by side with a recommended strategy and risk context." />
           <PremiumPreview label="Pro preview" title="PDF Investment Reports" copy="Create a clean browser print report that can be saved as a PDF for partners, lenders or your own file." />
           <PremiumPreview label="Pro preview" title="Unlimited Saved Deals" copy="Build a larger acquisition pipeline without losing scenarios, notes or assumptions." />
         </div>
@@ -2333,7 +2352,7 @@ function PricingPage() {
       price: '£0',
       badge: 'Current',
       copy: 'For testing the core underwriting workflow.',
-      items: ['BRRR Analyzer', 'Airbnb Analyzer', 'Local saved deals', 'Basic Deal Vault'],
+      items: ['BRRR Analyzer', 'SA Analyzer', 'Local saved deals', 'Basic Deal Vault'],
     },
     {
       name: 'Pro',
@@ -2455,14 +2474,14 @@ function VaultPage() {
         <div className="hero-actions">
           <button className="primary-btn" type="button" onClick={exportVault}>Export Vault</button>
           <Link className="secondary-link" to="/brrr">Add BRRR Deal</Link>
-          <Link className="secondary-link" to="/airbnb">Add Airbnb Deal</Link>
+          <Link className="secondary-link" to="/airbnb">Add SA Deal</Link>
         </div>
       </section>
 
       {vaultItems.length === 0 ? (
         <section className="empty-state">
           <strong>No vault items yet</strong>
-          <p>Save a BRRR or Airbnb opportunity to start building your investment opportunity database.</p>
+          <p>Save a BRRR or serviced accommodation opportunity to start building your investment opportunity database.</p>
         </section>
       ) : (
         <section className="vault-page-grid">
@@ -2599,10 +2618,10 @@ function CalculationsPage() {
         <InfoCard title="Return on total capital invested" copy="Annual cashflow divided by total capital invested, multiplied by 100. This avoids inflated refinance-based ROI." />
         <InfoCard title="BRRR cash-on-cash return" copy="Annual cashflow divided by the cash left in the deal after refinance. If all capital is recovered, AcquiraIQ displays Capital Fully Recycled." />
         <InfoCard title="Gross yield" copy="Annual gross rent divided by purchase price. This is a property performance screen, not investor return." />
-        <InfoCard title="Net yield" copy="Effective annual rent after voids and running costs, divided by purchase price. Mortgage is excluded so yield remains a property performance metric." />
+        <InfoCard title="Net yield" copy="Annual net operating income divided by total capital invested. Mortgage is excluded so yield remains separate from investor cashflow return." />
         <InfoCard title="Cash left in deal" copy="Total cash invested less the estimated refinance loan. This shows capital still tied up after refinance." />
         <InfoCard title="Equity created" copy="Post-refurb value less total project cost. This is an estimate and should be supported by sold comparables." />
-        <InfoCard title="Airbnb profit" copy="Gross monthly revenue minus platform fees, management fees, finance, utilities and cleaning costs." />
+        <InfoCard title="Serviced accommodation profit" copy="Gross monthly revenue minus platform fees, management fees, finance, utilities and cleaning costs." />
         <InfoCard title="Sensitivity analysis" copy="Stress tests show how results change when rent, rates, GDV or occupancy move away from the expected case." />
       </section>
 
@@ -2921,7 +2940,7 @@ function InvestorContactsPage() {
         <div className="panel">
           <PanelHeading label="Add contact" title="Relationship Details" meta="Premium" />
           <label className="note-entry"><span>Name</span><input value={form.name} onChange={(event) => updateForm('name', event.target.value)} placeholder="Jane Smith" /></label>
-          <label className="note-entry"><span>Role</span><select className="stage-select" value={form.role} onChange={(event) => updateForm('role', event.target.value)}><option>Agent</option><option>Broker</option><option>Sourcer</option><option>Lender</option><option>Solicitor</option><option>Partner</option></select></label>
+          <label className="note-entry"><span>Role</span><select className="stage-select" value={form.role} onChange={(event) => updateForm('role', event.target.value)}><option>Agent</option><option>Broker</option><option>Sourcer</option><option>Lender</option><option>Solicitor</option><option>Builder</option><option>JV Partner</option></select></label>
           <label className="note-entry"><span>Email</span><input value={form.email} onChange={(event) => updateForm('email', event.target.value)} placeholder="name@example.com" /></label>
           <label className="note-entry"><span>Phone</span><input value={form.phone} onChange={(event) => updateForm('phone', event.target.value)} placeholder="07123 456789" /></label>
           <label className="note-entry"><span>Notes</span><textarea value={form.notes} onChange={(event) => updateForm('notes', event.target.value)} rows="3" placeholder="Area, relationship, recent deal feedback." /></label>
@@ -3025,9 +3044,10 @@ function PipelinePage() {
       active: summary.active + (deal.stage !== 'Purchased' ? 1 : 0),
       offered: summary.offered + (deal.stage === 'Offered' ? 1 : 0),
       underOffer: summary.underOffer + (deal.stage === 'Under Offer' ? 1 : 0),
+      purchased: summary.purchased + (deal.stage === 'Purchased' ? 1 : 0),
       value: summary.value + toNumber(deal.askingPrice),
     }),
-    { active: 0, offered: 0, underOffer: 0, value: 0 },
+    { active: 0, offered: 0, underOffer: 0, purchased: 0, value: 0 },
   );
 
   return (
@@ -3041,18 +3061,19 @@ function PipelinePage() {
       <section className="summary-strip">
         <SummaryCard label="Active Opportunities" value={String(pipelineSummary.active)} copy="Deals not yet marked as purchased." />
         <SummaryCard label="Offers Submitted" value={String(pipelineSummary.offered)} copy="Deals currently at offer submitted stage." />
-        <SummaryCard label="Under Offer Deals" value={String(pipelineSummary.underOffer)} copy="Deals progressing through due diligence." />
-        <SummaryCard label="Pipeline Value" value={formatMoney(pipelineSummary.value)} copy="Total asking price across pipeline records." />
+        <SummaryCard label="Under Offer" value={String(pipelineSummary.underOffer)} copy="Deals progressing through due diligence." />
+        <SummaryCard label="Purchased" value={String(pipelineSummary.purchased)} copy="Completed acquisitions ready for Portfolio." />
+        <SummaryCard label="Estimated Pipeline Value" value={formatMoney(pipelineSummary.value)} copy="Total asking price across pipeline records." />
       </section>
 
       <section className="upgrade-strip glass-card">
         <div>
           <p className="eyebrow">Add lead</p>
           <h2>Capture an opportunity quickly</h2>
-          <p>Add sourced opportunities here, or move saved analyzer deals from BRRR, Airbnb or Deal Vault.</p>
+          <p>Add sourced opportunities here, or move saved analyzer deals from BRRR, SA or Deal Vault.</p>
         </div>
         <div className="pipeline-form">
-          <label className="note-entry"><span>Property Name / Address</span><input className="pipeline-input" value={form.title} onChange={(event) => updateForm('title', event.target.value)} placeholder="Liverpool Airbnb Opportunity" /></label>
+          <label className="note-entry"><span>Property Name / Address</span><input className="pipeline-input" value={form.title} onChange={(event) => updateForm('title', event.target.value)} placeholder="Liverpool SA Opportunity" /></label>
           <label className="note-entry"><span>Asking price</span><input className="pipeline-input" type="number" value={form.askingPrice} onChange={(event) => updateForm('askingPrice', event.target.value)} placeholder="200000" /></label>
           <label className="note-entry"><span>Source</span><input className="pipeline-input" value={form.source} onChange={(event) => updateForm('source', event.target.value)} placeholder="Agent, sourcer, auction, Rightmove" /></label>
           <label className="note-entry"><span>Notes</span><textarea value={form.notes} onChange={(event) => updateForm('notes', event.target.value)} rows="3" placeholder="Initial view, risks, follow-up actions." /></label>
@@ -3257,7 +3278,7 @@ function AIVerdictPanel({ verdict }) {
 function StrategyComparisonPanel({ comparison }) {
   return (
     <div className="panel strategy-panel">
-      <PanelHeading label="Strategy Comparison" title="BRRR vs Airbnb vs BTL" meta="Decision view" />
+      <PanelHeading label="Strategy Comparison" title="BRRR vs SA vs BTL" meta="Decision view" />
       <div className="recommendation-card">
         <span>Recommended Strategy</span>
         <strong>{comparison.recommendation}</strong>
@@ -3386,7 +3407,7 @@ function RoadmapBlock() {
         copy="AcquiraIQ connects analysis, saved evidence, acquisition stages and portfolio tracking in one operating system."
       />
       <div className="roadmap-columns">
-        <RoadmapColumn title="Analyse Deal" items={['BRRR Analyzer', 'Airbnb Analyzer', 'Investor Verdict', 'Sensitivity testing']} />
+        <RoadmapColumn title="Analyse Deal" items={['BRRR Analyzer', 'SA Analyzer', 'Investor Verdict', 'Sensitivity testing']} />
         <RoadmapColumn title="Manage Opportunity" items={['Named saved deals', 'Deal Vault', 'Acquisition Pipeline', 'Notes and scenarios']} />
         <RoadmapColumn title="Track Portfolio" items={['Portfolio Tracker', 'Growth forecast', 'Investor contacts', 'Property records']} />
       </div>
@@ -3409,7 +3430,7 @@ function StrategyComparisonPreview() {
       <SectionHeading
         label="Strategy comparison"
         title="Which strategy wins?"
-        copy="A flagship decision layer for comparing BRRR, Airbnb and BTL using profit, yield, return, capital position and risk."
+        copy="A flagship decision layer for comparing BRRR, SA and BTL using profit, yield, return, capital position and risk."
       />
       <div className="recommendation-card platform-recommendation">
         <span>Recommended Strategy</span>
@@ -3419,7 +3440,7 @@ function StrategyComparisonPreview() {
       <div className="strategy-table">
         <div><strong>Strategy</strong><strong>Monthly Profit</strong><strong>Yield</strong><strong>Return</strong><strong>Capital Left In</strong><strong>Risk Level</strong></div>
         <div><span>BRRR</span><span>From analyzer</span><span>Live</span><span>Live</span><span>Live</span><span>Moderate</span></div>
-        <div><span>Airbnb</span><span>From analyzer</span><span>Live</span><span>Estimate</span><span>N/A</span><span>Higher ops</span></div>
+        <div><span>SA</span><span>From analyzer</span><span>Live</span><span>Estimate</span><span>N/A</span><span>Higher ops</span></div>
         <div><span>BTL</span><span>Baseline</span><span>Estimate</span><span>Estimate</span><span>N/A</span><span>Lower ops</span></div>
       </div>
     </section>
