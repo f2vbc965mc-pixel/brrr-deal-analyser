@@ -1,5 +1,14 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { Link, NavLink, Outlet, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import {
+  getCurrentUserFromSession,
+  getStoredSession,
+  sendPasswordReset,
+  signInWithEmail,
+  signOutSession,
+  signUpWithEmail,
+  supabaseConfig,
+} from './supabaseClient.js';
 
 const STORAGE_KEY = 'brrr-saved-deals';
 const VAULT_STORAGE_KEY = 'acquiraiq-deal-vault';
@@ -1065,33 +1074,72 @@ function openPrintableReport(html) {
   return true;
 }
 
+const AuthContext = createContext(null);
+
+function AuthProvider({ children }) {
+  const [session, setSession] = useState(getStoredSession);
+  const user = getCurrentUserFromSession(session);
+
+  async function signUp(email, password) {
+    const data = await signUpWithEmail(email, password);
+    if (data.access_token) setSession(data);
+    return data;
+  }
+
+  async function signIn(email, password) {
+    const data = await signInWithEmail(email, password);
+    setSession(data);
+    return data;
+  }
+
+  async function signOut() {
+    await signOutSession();
+    setSession(null);
+  }
+
+  return (
+    <AuthContext.Provider value={{ session, user, signUp, signIn, signOut }}>
+      {children}
+    </AuthContext.Provider>
+  );
+}
+
+function useAuth() {
+  return useContext(AuthContext);
+}
+
 function App() {
   return (
-    <Routes>
-      <Route path="/" element={<Shell />}>
-        <Route index element={<LandingPage />} />
-        <Route path="dashboard" element={<DashboardPage />} />
-        <Route path="brrr" element={<BrrrAnalyzerPage />} />
-        <Route path="airbnb" element={<AirbnbAnalyzerPage />} />
-        <Route path="platform" element={<PlatformPage />} />
-        <Route path="pricing" element={<PricingPage />} />
-        <Route path="vault" element={<VaultPage />} />
-        <Route path="pipeline" element={<PipelinePage />} />
-        <Route path="contacts" element={<InvestorContactsPage />} />
-        <Route path="account" element={<AccountPage />} />
-        <Route path="calculations" element={<CalculationsPage />} />
-        <Route path="privacy" element={<PrivacyPage />} />
-        <Route path="terms" element={<TermsPage />} />
-        <Route path="cookies" element={<CookiesPage />} />
-        <Route path="contact" element={<ContactPage />} />
-        <Route path="not-financial-advice" element={<NotFinancialAdvicePage />} />
-        <Route path="professional-tools" element={<ProfessionalToolsPage />} />
-        <Route path="operating-system" element={<OperatingSystemPage />} />
-        <Route path="portfolio" element={<PortfolioPage />} />
-        <Route path="roadmap" element={<RoadmapPage />} />
-        <Route path="*" element={<NotFoundPage />} />
-      </Route>
-    </Routes>
+    <AuthProvider>
+      <Routes>
+        <Route path="/" element={<Shell />}>
+          <Route index element={<LandingPage />} />
+          <Route path="dashboard" element={<DashboardPage />} />
+          <Route path="brrr" element={<BrrrAnalyzerPage />} />
+          <Route path="airbnb" element={<AirbnbAnalyzerPage />} />
+          <Route path="platform" element={<PlatformPage />} />
+          <Route path="pricing" element={<PricingPage />} />
+          <Route path="vault" element={<VaultPage />} />
+          <Route path="pipeline" element={<PipelinePage />} />
+          <Route path="contacts" element={<InvestorContactsPage />} />
+          <Route path="account" element={<AccountPage />} />
+          <Route path="signup" element={<SignUpPage />} />
+          <Route path="login" element={<LoginPage />} />
+          <Route path="forgot-password" element={<ForgotPasswordPage />} />
+          <Route path="calculations" element={<CalculationsPage />} />
+          <Route path="privacy" element={<PrivacyPage />} />
+          <Route path="terms" element={<TermsPage />} />
+          <Route path="cookies" element={<CookiesPage />} />
+          <Route path="contact" element={<ContactPage />} />
+          <Route path="not-financial-advice" element={<NotFinancialAdvicePage />} />
+          <Route path="professional-tools" element={<ProfessionalToolsPage />} />
+          <Route path="operating-system" element={<OperatingSystemPage />} />
+          <Route path="portfolio" element={<PortfolioPage />} />
+          <Route path="roadmap" element={<RoadmapPage />} />
+          <Route path="*" element={<NotFoundPage />} />
+        </Route>
+      </Routes>
+    </AuthProvider>
   );
 }
 
@@ -1107,6 +1155,12 @@ function ScrollToTop() {
 
 function Shell() {
   const [menuOpen, setMenuOpen] = useState(false);
+  const { user, signOut } = useAuth();
+
+  async function handleLogOut() {
+    await signOut();
+    setMenuOpen(false);
+  }
 
   return (
     <>
@@ -1141,9 +1195,23 @@ function Shell() {
           <NavLink to="/platform" onClick={() => setMenuOpen(false)}>
             Platform
           </NavLink>
-          <Link className="nav-cta" to="/" onClick={() => setMenuOpen(false)}>
-            Start Free
-          </Link>
+          {user ? (
+            <>
+              <span className="nav-user">{user.email}</span>
+              <button className="nav-logout" type="button" onClick={handleLogOut}>
+                Log Out
+              </button>
+            </>
+          ) : (
+            <>
+              <Link to="/login" onClick={() => setMenuOpen(false)}>
+                Sign In
+              </Link>
+              <Link className="nav-cta" to="/signup" onClick={() => setMenuOpen(false)}>
+                Create Free Account
+              </Link>
+            </>
+          )}
         </div>
       </nav>
       <ScrollToTop />
@@ -1159,29 +1227,6 @@ function Shell() {
 }
 
 function LandingPage() {
-  const authRef = useRef(null);
-  const navigate = useNavigate();
-  const [showAuth, setShowAuth] = useState(false);
-  const [email, setEmail] = useState(loadAccount()?.email || '');
-  const [password, setPassword] = useState('');
-
-  function startFree() {
-    setShowAuth(true);
-    window.setTimeout(() => authRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 80);
-  }
-
-  function continueToDashboard() {
-    const cleanEmail = email.trim();
-    if (cleanEmail) {
-      saveAccount({
-        email: cleanEmail,
-        plan: loadAccount()?.plan || 'Free',
-        createdAt: loadAccount()?.createdAt || new Date().toISOString(),
-      });
-    }
-    navigate('/dashboard');
-  }
-
   return (
     <main className="page landing-page">
       <section className="hero-section">
@@ -1193,9 +1238,9 @@ function LandingPage() {
           </p>
 
           <div className="hero-actions">
-            <button className="primary-btn" type="button" onClick={startFree}>
+            <Link className="primary-link" to="/signup">
               Start Free
-            </button>
+            </Link>
             <Link className="secondary-link" to="/platform">
               View Pro Features
             </Link>
@@ -1307,31 +1352,152 @@ function LandingPage() {
         </div>
       </section>
 
-      <section ref={authRef} className={showAuth ? 'auth-section visible' : 'auth-section'}>
-        <div className="auth-card glass-card">
-          <p className="eyebrow">Free account</p>
-          <h2>Create your free investor account</h2>
-          <p>Frontend-only account flow for now. Authentication can be connected when the platform is ready.</p>
-          <label>
-            Email
-            <input type="email" placeholder="investor@example.com" value={email} onChange={(event) => setEmail(event.target.value)} />
-          </label>
-          <label>
-            Password
-            <input type="password" placeholder="Create a password" value={password} onChange={(event) => setPassword(event.target.value)} />
-          </label>
-          <button className="primary-btn" type="button" onClick={continueToDashboard}>
-            Continue
-          </button>
-        </div>
-      </section>
-
       <section className="bottom-cta">
         <h2>Start Analysing Deals for Free</h2>
         <p>Open the dashboard and launch an active analysis module in seconds.</p>
-        <Link className="primary-link" to="/dashboard">
-          Open Dashboard
+        <Link className="primary-link" to="/signup">
+          Create Free Account
         </Link>
+      </section>
+    </main>
+  );
+}
+
+function SignUpPage() {
+  const { user, signUp } = useAuth();
+  const navigate = useNavigate();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [message, setMessage] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+    setBusy(true);
+    setMessage('');
+    try {
+      const data = await signUp(email.trim(), password);
+      if (data.access_token) {
+        setMessage('Account created. Redirecting to dashboard...');
+        window.setTimeout(() => navigate('/dashboard'), 500);
+      } else {
+        setMessage('Account created. Check your email to confirm your sign up, then log in.');
+      }
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <AuthLayout
+      label="Free account"
+      title={user ? 'You are signed in' : 'Create your free investor account'}
+      copy={user ? `${user.email} is already signed in.` : 'Use Supabase Auth to create a secure account. Deal data still stays in local storage for now.'}
+    >
+      {user ? (
+        <Link className="primary-link" to="/dashboard">Open Dashboard</Link>
+      ) : (
+        <form className="auth-form" onSubmit={handleSubmit}>
+          <label className="note-entry"><span>Email</span><input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="investor@example.com" required /></label>
+          <label className="note-entry"><span>Password</span><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Create a password" minLength="6" required /></label>
+          <button className="primary-btn" type="submit" disabled={busy}>{busy ? 'Creating...' : 'Create Free Account'}</button>
+          {message && <p className="status-message">{message}</p>}
+          {!supabaseConfig.isConfigured && <p className="auth-warning">Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to enable live authentication.</p>}
+          <Link className="panel-link" to="/login">Already have an account? Sign in</Link>
+        </form>
+      )}
+    </AuthLayout>
+  );
+}
+
+function LoginPage() {
+  const { user, signIn } = useAuth();
+  const navigate = useNavigate();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [message, setMessage] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+    setBusy(true);
+    setMessage('');
+    try {
+      await signIn(email.trim(), password);
+      navigate('/dashboard');
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <AuthLayout
+      label="Sign in"
+      title={user ? 'You are signed in' : 'Sign in to AcquiraIQ'}
+      copy={user ? `${user.email} is already signed in.` : 'Sign in to save deals, scenarios and notes while the workspace continues using local storage.'}
+    >
+      {user ? (
+        <Link className="primary-link" to="/dashboard">Open Dashboard</Link>
+      ) : (
+        <form className="auth-form" onSubmit={handleSubmit}>
+          <label className="note-entry"><span>Email</span><input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="investor@example.com" required /></label>
+          <label className="note-entry"><span>Password</span><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Your password" required /></label>
+          <button className="primary-btn" type="submit" disabled={busy}>{busy ? 'Signing in...' : 'Sign In'}</button>
+          {message && <p className="status-message">{message}</p>}
+          {!supabaseConfig.isConfigured && <p className="auth-warning">Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to enable live authentication.</p>}
+          <div className="auth-links">
+            <Link className="panel-link" to="/forgot-password">Forgot password?</Link>
+            <Link className="panel-link" to="/signup">Create free account</Link>
+          </div>
+        </form>
+      )}
+    </AuthLayout>
+  );
+}
+
+function ForgotPasswordPage() {
+  const [email, setEmail] = useState('');
+  const [message, setMessage] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+    setBusy(true);
+    setMessage('');
+    try {
+      await sendPasswordReset(email.trim());
+      setMessage('Password reset email sent if this account exists.');
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <AuthLayout label="Password reset" title="Reset your password" copy="Enter your email and Supabase will send a reset link if the account exists.">
+      <form className="auth-form" onSubmit={handleSubmit}>
+        <label className="note-entry"><span>Email</span><input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="investor@example.com" required /></label>
+        <button className="primary-btn" type="submit" disabled={busy}>{busy ? 'Sending...' : 'Send Reset Email'}</button>
+        {message && <p className="status-message">{message}</p>}
+        <Link className="panel-link" to="/login">Back to sign in</Link>
+      </form>
+    </AuthLayout>
+  );
+}
+
+function AuthLayout({ label, title, copy, children }) {
+  return (
+    <main className="page auth-page">
+      <section className="auth-card glass-card">
+        <p className="eyebrow">{label}</p>
+        <h1>{title}</h1>
+        <p>{copy}</p>
+        {children}
       </section>
     </main>
   );
@@ -1527,6 +1693,7 @@ function DashboardPage() {
 }
 
 function BrrrAnalyzerPage() {
+  const { user } = useAuth();
   const [inputs, setInputs] = useState(initialInputs);
   const [scenario, setScenario] = useState('expected');
   const [activeTab, setActiveTab] = useState('overview');
@@ -1654,6 +1821,10 @@ function BrrrAnalyzerPage() {
   }
 
   function addVaultItem(type, title, copy) {
+    if (!user) {
+      setSaveMessage('Sign in to save deals, scenarios and notes.');
+      return;
+    }
     const item = {
       id: crypto.randomUUID(),
       type,
@@ -1669,6 +1840,10 @@ function BrrrAnalyzerPage() {
   }
 
   function saveCurrentDeal() {
+    if (!user) {
+      setSaveMessage('Sign in to save this opportunity.');
+      return;
+    }
     const cleanName = dealName.trim() || createDefaultDealName(inputs, 'BRRR');
     const deal = {
       id: crypto.randomUUID(),
@@ -1705,6 +1880,10 @@ function BrrrAnalyzerPage() {
   }
 
   function saveScenario() {
+    if (!user) {
+      setSaveMessage('Sign in to save scenarios.');
+      return;
+    }
     addVaultItem(
       'Scenario',
       `${dealName.trim() || createDefaultDealName(inputs, 'BRRR')} · ${scenario[0].toUpperCase()}${scenario.slice(1)}`,
@@ -1713,6 +1892,10 @@ function BrrrAnalyzerPage() {
   }
 
   function addNote() {
+    if (!user) {
+      setSaveMessage('Sign in to save notes.');
+      return;
+    }
     const note = noteDraft.trim();
     if (!note) return;
     addVaultItem('Note', 'Investor note', note);
@@ -1804,6 +1987,7 @@ function BrrrAnalyzerPage() {
         </div>
         <div className="module-header-actions">
           {saveMessage && <span>{saveMessage}</span>}
+          {!user && <Link className="secondary-link" to="/login">Sign In</Link>}
           <button className="secondary-btn" type="button" onClick={exportReport}>
             Generate PDF Report
           </button>
@@ -1927,6 +2111,7 @@ function BrrrAnalyzerPage() {
 }
 
 function AirbnbAnalyzerPage() {
+  const { user } = useAuth();
   const [inputs, setInputs] = useState(initialAirbnbInputs);
   const [scenario, setScenario] = useState('expected');
   const [activeTab, setActiveTab] = useState('overview');
@@ -2049,6 +2234,10 @@ function AirbnbAnalyzerPage() {
   }
 
   function addVaultItem(type, title, copy) {
+    if (!user) {
+      setSaveMessage('Sign in to save deals, scenarios and notes.');
+      return;
+    }
     const item = {
       id: crypto.randomUUID(),
       type,
@@ -2067,6 +2256,10 @@ function AirbnbAnalyzerPage() {
   }
 
   function saveCurrentDeal() {
+    if (!user) {
+      setSaveMessage('Sign in to save this opportunity.');
+      return;
+    }
     const cleanName = dealName.trim() || createDefaultDealName({ purchasePrice: inputs.purchasePrice }, 'SA');
     saveVault([
       {
@@ -2089,6 +2282,10 @@ function AirbnbAnalyzerPage() {
   }
 
   function saveScenario() {
+    if (!user) {
+      setSaveMessage('Sign in to save scenarios.');
+      return;
+    }
     addVaultItem(
       'Scenario',
       `${dealName.trim() || createDefaultDealName({ purchasePrice: inputs.purchasePrice }, 'SA')} · ${scenario[0].toUpperCase()}${scenario.slice(1)}`,
@@ -2097,6 +2294,10 @@ function AirbnbAnalyzerPage() {
   }
 
   function addNote() {
+    if (!user) {
+      setSaveMessage('Sign in to save notes.');
+      return;
+    }
     const note = noteDraft.trim();
     if (!note) return;
     addVaultItem('Note', 'SA investor note', note);
@@ -2123,6 +2324,7 @@ function AirbnbAnalyzerPage() {
         </div>
         <div className="module-header-actions">
           {saveMessage && <span>{saveMessage}</span>}
+          {!user && <Link className="secondary-link" to="/login">Sign In</Link>}
           <button className="primary-btn" type="button" onClick={saveCurrentDeal}>
             Save Opportunity
           </button>
