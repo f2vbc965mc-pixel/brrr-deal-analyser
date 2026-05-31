@@ -7,6 +7,7 @@ import {
   signInWithEmail,
   signOutSession,
   signUpWithEmail,
+  supabase,
   supabaseConfig,
 } from './supabaseClient.js';
 
@@ -1077,18 +1078,50 @@ function openPrintableReport(html) {
 const AuthContext = createContext(null);
 
 function AuthProvider({ children }) {
-  const [session, setSession] = useState(getStoredSession);
+  const [session, setSession] = useState(null);
+  const [authLoading, setAuthLoading] = useState(Boolean(supabase));
   const user = getCurrentUserFromSession(session);
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadSession() {
+      try {
+        const currentSession = await getStoredSession();
+        if (mounted) setSession(currentSession);
+      } catch {
+        if (mounted) setSession(null);
+      } finally {
+        if (mounted) setAuthLoading(false);
+      }
+    }
+
+    loadSession();
+
+    if (!supabase) return () => {
+      mounted = false;
+    };
+
+    const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession);
+      setAuthLoading(false);
+    });
+
+    return () => {
+      mounted = false;
+      data.subscription.unsubscribe();
+    };
+  }, []);
 
   async function signUp(email, password) {
     const data = await signUpWithEmail(email, password);
-    if (data.access_token) setSession(data);
+    if (data.session) setSession(data.session);
     return data;
   }
 
   async function signIn(email, password) {
     const data = await signInWithEmail(email, password);
-    setSession(data);
+    setSession(data.session);
     return data;
   }
 
@@ -1098,7 +1131,7 @@ function AuthProvider({ children }) {
   }
 
   return (
-    <AuthContext.Provider value={{ session, user, signUp, signIn, signOut }}>
+    <AuthContext.Provider value={{ session, user, authLoading, signUp, signIn, signOut }}>
       {children}
     </AuthContext.Provider>
   );
@@ -1377,7 +1410,7 @@ function SignUpPage() {
     setMessage('');
     try {
       const data = await signUp(email.trim(), password);
-      if (data.access_token) {
+      if (data.session) {
         setMessage('Account created. Redirecting to dashboard...');
         window.setTimeout(() => navigate('/dashboard'), 500);
       } else {
