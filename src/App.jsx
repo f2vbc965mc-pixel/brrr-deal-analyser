@@ -1797,9 +1797,10 @@ function BrrrAnalyzerPage() {
     <main className="page analyzer-page">
       <section className="module-header">
         <div>
-          <p className="eyebrow">Active module</p>
+          <p className="eyebrow">Analysis</p>
           <h1>BRRR Analyzer</h1>
-          <p>Underwrite purchase, refurb, refinance position, cashflow, yield, total capital return and BRRR cash-on-cash return.</p>
+          <p>Analyse purchase, refinance and cashflow assumptions before committing capital.</p>
+          <Breadcrumbs items={['Dashboard', 'BRRR']} />
         </div>
         <div className="module-header-actions">
           {saveMessage && <span>{saveMessage}</span>}
@@ -2115,9 +2116,10 @@ function AirbnbAnalyzerPage() {
     <main className="page analyzer-page">
       <section className="module-header">
         <div>
-          <p className="eyebrow">Early access module</p>
+          <p className="eyebrow">Analysis</p>
           <h1>Serviced Accommodation Analyzer</h1>
           <p>Analyse Airbnb, Booking.com and short-term rental opportunities against long-term rental performance.</p>
+          <Breadcrumbs items={['Dashboard', 'Serviced Accommodation']} />
         </div>
         <div className="module-header-actions">
           {saveMessage && <span>{saveMessage}</span>}
@@ -2127,7 +2129,7 @@ function AirbnbAnalyzerPage() {
         </div>
       </section>
 
-      <section className="summary-strip" aria-label="Airbnb summary">
+      <section className="summary-strip" aria-label="Serviced accommodation summary">
         <SummaryCard label="Monthly Profit" value={formatMoney(metrics.monthlyProfit)} copy="After platform, management, bills, cleaning and finance costs." />
         <SummaryCard label="SA Yield" value={formatPercent(metrics.airbnbYield)} copy="Annual profit compared with current market value." />
         <SummaryCard label="Monthly Difference vs BTL" value={compareAgainstBtl ? formatMoney(metrics.monthlyDifference) : 'Off'} copy="Difference versus long-term rental profit when comparison is enabled." />
@@ -2146,7 +2148,7 @@ function AirbnbAnalyzerPage() {
         </div>
 
         <div className="panel analysis-workspace">
-          <PanelHeading label="Analysis" title="Airbnb Decision Workspace" meta="Estimate" />
+          <PanelHeading label="Analysis" title="SA Decision Workspace" meta="Estimate" />
           <AnalysisTabs activeTab={activeTab} setActiveTab={setActiveTab} />
 
           {activeTab === 'overview' && (
@@ -2826,7 +2828,8 @@ function PortfolioPage() {
       <section className="page-hero compact">
         <p className="eyebrow">Portfolio</p>
         <h1>Portfolio Tracker</h1>
-        <p>The final stage of the investor workflow: track purchased properties with value, rent, mortgage balance and estimated equity in one local workspace.</p>
+        <p>Track properties, equity, rent and portfolio growth in one workspace.</p>
+        <Breadcrumbs items={['Platform', 'Portfolio']} />
       </section>
 
       <section className="summary-strip">
@@ -2923,9 +2926,10 @@ function InvestorContactsPage() {
   return (
     <main className="page contacts-page">
       <section className="page-hero compact">
-        <p className="eyebrow">Investor CRM · Premium Preview</p>
+        <p className="eyebrow">Relationships</p>
         <h1>Investor Contacts</h1>
-        <p>Keep estate agents, sourcers, mortgage brokers, solicitors, builders and joint venture partners close to the acquisition workflow.</p>
+        <p>Keep brokers, agents, sourcers and professional partners connected to your acquisition workflow.</p>
+        <Breadcrumbs items={['Platform', 'Investor CRM']} />
       </section>
 
       <section className="trust-section glass-card">
@@ -3053,9 +3057,10 @@ function PipelinePage() {
   return (
     <main className="page pipeline-page">
       <section className="page-hero compact">
-        <p className="eyebrow">Acquisition Pipeline</p>
-        <h1>Move deals from lead to purchased</h1>
-        <p>Track opportunities through the investor workflow: Analyse Deal, Save Opportunity, Move To Pipeline, Add To Portfolio.</p>
+        <p className="eyebrow">Acquisition Workflow</p>
+        <h1>Deal Pipeline</h1>
+        <p>Move opportunities from lead to purchased through a structured acquisition process.</p>
+        <Breadcrumbs items={['Platform', 'Pipeline']} />
       </section>
 
       <section className="summary-strip">
@@ -3715,6 +3720,19 @@ function MembershipTier({ title, badge, items }) {
         ))}
       </ul>
     </article>
+  );
+}
+
+function Breadcrumbs({ items }) {
+  return (
+    <nav className="breadcrumbs" aria-label="Breadcrumb">
+      {items.map((item, index) => (
+        <span key={item}>
+          {index > 0 && <i>/</i>}
+          {item}
+        </span>
+      ))}
+    </nav>
   );
 }
 
