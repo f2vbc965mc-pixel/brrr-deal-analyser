@@ -395,15 +395,43 @@ function getDashboardStats() {
   const portfolioProperties = loadPortfolioProperties();
   const account = loadAccount();
   const upgradeIntent = loadUpgradeIntent();
+  const vaultDealItems = vaultItems.filter((item) => item.type === 'Deal');
+  const recentAnalyses = [
+    ...savedDeals.map((deal) => ({
+      id: deal.id,
+      name: deal.name,
+      metric: deal.metrics?.monthlyCashflow,
+      metricLabel: 'monthly cashflow',
+      createdAt: deal.createdAt,
+    })),
+    ...vaultDealItems
+      .filter((item) => !item.dealId)
+      .map((item) => ({
+        id: item.id,
+        name: item.title,
+        metric: item.metrics?.monthlyProfit ?? item.metrics?.monthlyCashflow,
+        metricLabel: item.metrics?.monthlyProfit === undefined ? 'monthly cashflow' : 'monthly profit',
+        createdAt: item.createdAt,
+      })),
+  ].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   const bestRoi = savedDeals.reduce((best, deal) => Math.max(best, deal.metrics?.cashOnCashRoi || 0), 0);
   const bestCashflow = savedDeals.reduce((best, deal) => Math.max(best, deal.metrics?.monthlyCashflow || 0), 0);
+  const portfolioTotals = portfolioProperties.reduce(
+    (summary, property) => ({
+      value: summary.value + toNumber(property.currentValue),
+      rent: summary.rent + toNumber(property.monthlyRent),
+      equity: summary.equity + Math.max(toNumber(property.currentValue) - toNumber(property.mortgageBalance), 0),
+    }),
+    { value: 0, rent: 0, equity: 0 },
+  );
 
   return {
-    dealsAnalysed: savedDeals.length,
+    dealsAnalysed: Math.max(savedDeals.length, vaultDealItems.length),
     savedScenarios: savedDeals.length,
     vaultItems: vaultItems.length,
     pipelineDeals: pipelineDeals.length,
     portfolioProperties: portfolioProperties.length,
+    portfolioTotals,
     bestRoi,
     bestCashflow,
     account,
@@ -411,7 +439,7 @@ function getDashboardStats() {
     syncStatus: loadSyncStatus(),
     recentVaultItems: vaultItems.slice(0, 3),
     recentPipelineDeals: pipelineDeals.slice(0, 3),
-    recentDeals: savedDeals.slice(0, 3),
+    recentDeals: recentAnalyses.slice(0, 3),
   };
 }
 
@@ -958,6 +986,7 @@ function App() {
         <Route path="terms" element={<TermsPage />} />
         <Route path="cookies" element={<CookiesPage />} />
         <Route path="contact" element={<ContactPage />} />
+        <Route path="not-financial-advice" element={<NotFinancialAdvicePage />} />
         <Route path="professional-tools" element={<ProfessionalToolsPage />} />
         <Route path="operating-system" element={<OperatingSystemPage />} />
         <Route path="portfolio" element={<PortfolioPage />} />
@@ -1013,7 +1042,7 @@ function Shell() {
       <footer className="footer-note">
         <span>AcquiraIQ</span>
         <p>
-          Investment analysis software, not financial advice. Review the <Link to="/calculations">calculation guide</Link>, <Link to="/privacy">privacy policy</Link>, <Link to="/terms">terms</Link> and <Link to="/contact">contact</Link>.
+          Investment analysis software, not financial advice. Review the <Link to="/calculations">calculation guide</Link>, <Link to="/privacy">privacy policy</Link>, <Link to="/terms">terms</Link>, <Link to="/contact">contact</Link> and <Link to="/not-financial-advice">not financial advice</Link>.
         </p>
       </footer>
     </>
@@ -1051,23 +1080,23 @@ function LandingPage() {
           <p className="eyebrow">Premium property investment software</p>
           <h1>Analyse Property Deals Like a Professional Investor</h1>
           <p className="hero-subtitle">
-            Compare BRRR, Buy-to-Let, Airbnb and Flip strategies in seconds with realistic investment analysis tools.
+            Calculate BRRR and Airbnb opportunities, compare investments, track your pipeline and manage your growing portfolio from one platform.
           </p>
 
           <div className="hero-actions">
             <button className="primary-btn" type="button" onClick={startFree}>
               Start Free
             </button>
-            <Link className="secondary-link" to="/dashboard">
-              View Demo
+            <Link className="secondary-link" to="/platform">
+              View Pro Features
             </Link>
           </div>
         </div>
 
         <div className="hero-preview glass-card">
           <div className="preview-header">
-            <span>Investment model</span>
-            <strong>Live underwriting</strong>
+            <span>Investor workflow</span>
+            <strong>Analyse → Save → Manage</strong>
           </div>
           <div className="preview-metric">
             <small>Monthly cashflow</small>
@@ -1093,7 +1122,7 @@ function LandingPage() {
         <SectionHeading
           label="Built for serious property investors"
           title="Realistic numbers, not marketing ROI"
-          copy="Analyse deals in under 60 seconds using clear assumptions, practical cashflow metrics and investor-grade return calculations."
+          copy="Analyse, compare, save and manage property investment opportunities in one place using clear assumptions and investor-grade return calculations."
         />
 
         <div className="feature-grid">
@@ -1108,8 +1137,8 @@ function LandingPage() {
           />
           <FeatureCard
             title="Portfolio Tracking"
-            copy="Save and compare deals as you build a disciplined investment pipeline."
-            status="Pro Feature"
+            copy="Move opportunities from saved analysis into pipeline stages and track purchased assets as your portfolio grows."
+            status="Active"
           />
         </div>
       </section>
@@ -1118,12 +1147,12 @@ function LandingPage() {
         <SectionHeading
           label="Workflow"
           title="Compare strategies before committing capital"
-          copy="A simple underwriting process designed to support better investment decisions."
+          copy="A simple operating flow designed to help investors move from first review to a retained decision record."
         />
         <div className="workflow-grid">
           <WorkflowStep number="1" title="Enter deal details" copy="Capture purchase, rent, finance and cost assumptions." />
           <WorkflowStep number="2" title="Review investor metrics" copy="Focus on cashflow, yield, cash left in and cash-on-cash ROI." />
-          <WorkflowStep number="3" title="Save, compare and decide" copy="Keep a record of opportunities and return to them later." />
+          <WorkflowStep number="3" title="Save, pipeline and track" copy="Keep a record of opportunities, move them forward and add purchased assets to your portfolio." />
         </div>
       </section>
 
@@ -1138,8 +1167,8 @@ function LandingPage() {
       <section className="upgrade-strip glass-card">
         <div>
           <p className="eyebrow">Launch offer</p>
-          <h2>Free tools now. Pro workflow when you are ready.</h2>
-          <p>Use the calculators, Deal Vault and export flow today. Pricing is structured for Stripe subscriptions later, without switching payments on yet.</p>
+          <h2>Free underwriting today. Pro decision support when you are ready.</h2>
+          <p>Use the analyzers, Deal Vault, Pipeline and Portfolio today. Pro features are positioned for deeper reports, comparisons and scenario workflows later.</p>
         </div>
         <div className="hero-actions">
           <Link className="primary-link" to="/pricing">View Pricing</Link>
@@ -1199,12 +1228,6 @@ function DashboardPage() {
       active: true,
     },
     {
-      title: 'Flip Analyzer',
-      status: 'Pro Feature',
-      copy: 'Estimate resale margin, holding costs and project profit.',
-      action: 'Preview',
-    },
-    {
       title: 'Portfolio Tracker',
       status: 'Active',
       copy: 'Track assets, rent, equity and growth forecast.',
@@ -1222,7 +1245,7 @@ function DashboardPage() {
     },
     {
       title: 'Investor Contacts',
-      status: 'Premium',
+      status: 'Premium Preview',
       copy: 'Track brokers, agents, sourcers and lenders.',
       action: 'Open Contacts',
       to: '/contacts',
@@ -1241,35 +1264,35 @@ function DashboardPage() {
     <main className="page dashboard-page">
       <section className="page-hero compact">
         <p className="eyebrow">AcquiraIQ workspace</p>
-        <h1>Investment Dashboard</h1>
-        <p>The Investor Operating System for analysing opportunities, saving scenarios and building a repeatable property workflow.</p>
+        <h1>Investor Command Centre</h1>
+        <p>Analyse opportunities, save decisions, manage acquisition stages and track owned properties from one calm workspace.</p>
       </section>
 
       <section className="progress-panel glass-card">
         <div>
           <p className="eyebrow">Investor progress</p>
-          <h2>Your analysis workspace</h2>
-          <p>Track the evidence you are building as you review opportunities. This uses saved scenarios in your browser for now.</p>
+          <h2>Your investment operating view</h2>
+          <p>Track the evidence, opportunities and owned assets you are building. Data is stored locally in your browser until cloud sync is connected.</p>
         </div>
         <div className="dashboard-summary">
-          <SummaryCard label="Deals Analysed" value={String(stats.dealsAnalysed)} copy="Saved BRRR scenarios." />
-          <SummaryCard label="Saved Deals" value={String(stats.savedScenarios)} copy="Local saved opportunities." />
-          <SummaryCard label="Vault Items" value={String(stats.vaultItems)} copy="Notes, deals and scenarios." />
-          <SummaryCard label="Pipeline" value={String(stats.pipelineDeals)} copy="Acquisition opportunities." />
-          <SummaryCard label="Portfolio" value={String(stats.portfolioProperties)} copy="Tracked properties." />
+          <SummaryCard label="Deals Analysed" value={String(stats.dealsAnalysed)} copy="Saved underwriting records." />
+          <SummaryCard label="Saved Deals" value={String(stats.vaultItems)} copy="Deal Vault items and notes." />
+          <SummaryCard label="Pipeline Opportunities" value={String(stats.pipelineDeals)} copy="Active acquisition stages." />
+          <SummaryCard label="Portfolio Properties" value={String(stats.portfolioProperties)} copy="Tracked owned assets." />
+          <SummaryCard label="Monthly Rental Income" value={formatMoney(stats.portfolioTotals.rent)} copy="Gross rent from portfolio records." />
+          <SummaryCard label="Estimated Portfolio Equity" value={formatMoney(stats.portfolioTotals.equity)} copy="Value less mortgage balances." />
         </div>
       </section>
 
       <section className="onboarding-panel glass-card">
         <SectionHeading
-          label="Launch checklist"
-          title="Get your workspace ready"
-          copy="The fastest path from first visit to a retained user is a saved deal, a clear verdict and an exported decision record."
+          label="Next best actions"
+          title="Move one opportunity through the workflow"
+          copy="The core AcquiraIQ journey is simple: analyse a deal, save the opportunity, move it into Pipeline and add it to Portfolio if purchased."
         />
         <div className="checklist-grid">
-          <ChecklistItem done={Boolean(stats.account?.email)} title="Create account" copy="Save a local beta account email." />
-          <ChecklistItem done={stats.dealsAnalysed > 0} title="Save first deal" copy="Use BRRR and save an opportunity." />
-          <ChecklistItem done={stats.vaultItems > 0} title="Build Deal Vault" copy="Save a scenario or investor note." />
+          <ChecklistItem done={stats.dealsAnalysed > 0} title="Analyse deal" copy="Use BRRR or Airbnb to model the opportunity." />
+          <ChecklistItem done={stats.vaultItems > 0} title="Save opportunity" copy="Name the deal and store notes in Deal Vault." />
           <ChecklistItem done={stats.pipelineDeals > 0} title="Move to pipeline" copy="Progress one opportunity through stages." />
           <ChecklistItem done={stats.portfolioProperties > 0} title="Add to portfolio" copy="Track a purchased or live property." />
         </div>
@@ -1288,9 +1311,9 @@ function DashboardPage() {
                 {module.action}
               </Link>
             ) : (
-              <button className="module-action muted" type="button">
+              <span className="module-action muted static">
                 {module.action}
-              </button>
+              </span>
             )}
           </article>
         ))}
@@ -1300,16 +1323,16 @@ function DashboardPage() {
         <SectionHeading
           label="Workspace"
           title="Return to your investment workflow"
-          copy="Recent analyses, saved deals, notes and watchlist items are grouped into one calm operating view."
+          copy="Recent analyses, saved deals, notes and active opportunities are grouped into one calm operating view."
         />
         <div className="workspace-grid">
           <DashboardPanel title="Recent Analyses" meta="Local browser">
             {stats.recentDeals.length > 0 ? (
               stats.recentDeals.map((deal) => (
-                <p key={deal.id}>{deal.name} · {formatMoney(deal.metrics.monthlyCashflow)} monthly cashflow</p>
+                <p key={deal.id}>{deal.name} · {formatMoney(deal.metric)} {deal.metricLabel}</p>
               ))
             ) : (
-              <EmptyLine text="No recent saved analyses yet. Open a module and save your first scenario." />
+              <EmptyLine text="No saved deals yet. Analyse your first BRRR or Airbnb opportunity to begin building your deal vault." />
             )}
           </DashboardPanel>
           <DashboardPanel title="Deal Vault" meta={`${stats.vaultItems} items`}>
@@ -1322,7 +1345,7 @@ function DashboardPage() {
             )}
             <Link className="panel-link" to="/vault">Open vault</Link>
           </DashboardPanel>
-          <DashboardPanel title="Watchlist" meta="Future">
+          <DashboardPanel title="Pipeline" meta={`${stats.pipelineDeals} opportunities`}>
             {stats.recentPipelineDeals.length > 0 ? (
               stats.recentPipelineDeals.map((deal) => (
                 <p key={deal.id}>{deal.title} · {deal.stage}</p>
@@ -1632,10 +1655,10 @@ function BrrrAnalyzerPage() {
         <div className="module-header-actions">
           {saveMessage && <span>{saveMessage}</span>}
           <button className="secondary-btn" type="button" onClick={exportReport}>
-            Export report
+            Generate PDF Report
           </button>
           <button className="primary-btn" type="button" onClick={saveCurrentDeal}>
-            Save Deal
+            Save Opportunity
           </button>
         </div>
       </section>
@@ -1752,9 +1775,15 @@ function AirbnbAnalyzerPage() {
   const [inputs, setInputs] = useState(initialAirbnbInputs);
   const [scenario, setScenario] = useState('expected');
   const [activeTab, setActiveTab] = useState('overview');
+  const [dealName, setDealName] = useState(createDefaultDealName({ purchasePrice: initialAirbnbInputs.propertyValue }, 'Airbnb'));
+  const [dealNote, setDealNote] = useState('');
+  const [vaultItems, setVaultItems] = useState(loadDealVault);
+  const [noteDraft, setNoteDraft] = useState('');
+  const [saveMessage, setSaveMessage] = useState('');
 
   function updateInput(name, value) {
     setInputs((currentInputs) => ({ ...currentInputs, [name]: value }));
+    setSaveMessage('');
   }
 
   const metrics = useMemo(() => {
@@ -1849,6 +1878,75 @@ function AirbnbAnalyzerPage() {
   const signatureVerdict = getSignatureVerdict('Airbnb', metrics, health);
   const strategyComparison = getAirbnbStrategyComparison(metrics);
 
+  function saveVault(nextVaultItems) {
+    setVaultItems(nextVaultItems);
+    localStorage.setItem(VAULT_STORAGE_KEY, JSON.stringify(nextVaultItems));
+  }
+
+  function addVaultItem(type, title, copy) {
+    const item = {
+      id: crypto.randomUUID(),
+      type,
+      title,
+      copy,
+      createdAt: new Date().toISOString(),
+      route: '/airbnb',
+      scenario,
+      dealName,
+      strategy: 'Airbnb',
+      inputs: { ...inputs },
+      metrics: { ...metrics },
+    };
+    saveVault([item, ...vaultItems]);
+    setSaveMessage(`${title} added to Deal Vault`);
+  }
+
+  function saveCurrentDeal() {
+    const cleanName = dealName.trim() || createDefaultDealName({ purchasePrice: inputs.propertyValue }, 'Airbnb');
+    saveVault([
+      {
+        id: crypto.randomUUID(),
+        type: 'Deal',
+        title: cleanName,
+        copy: dealNote.trim() || `${formatMoney(metrics.monthlyProfit)} monthly profit · ${formatMoney(metrics.monthlyDifference)} versus BTL`,
+        createdAt: new Date().toISOString(),
+        route: '/airbnb',
+        scenario,
+        name: cleanName,
+        notes: dealNote.trim(),
+        inputs: { ...inputs },
+        metrics: { ...metrics },
+        strategy: 'Airbnb',
+      },
+      ...vaultItems,
+    ]);
+    setSaveMessage(`${cleanName} saved`);
+  }
+
+  function saveScenario() {
+    addVaultItem(
+      'Scenario',
+      `${dealName.trim() || createDefaultDealName({ purchasePrice: inputs.propertyValue }, 'Airbnb')} · ${scenario[0].toUpperCase()}${scenario.slice(1)}`,
+      `${formatMoney(metrics.monthlyProfit)} monthly profit · ${formatPercent(metrics.airbnbYield)} Airbnb yield`,
+    );
+  }
+
+  function addNote() {
+    const note = noteDraft.trim();
+    if (!note) return;
+    addVaultItem('Note', 'Airbnb investor note', note);
+    setNoteDraft('');
+  }
+
+  function deleteVaultItem(itemId) {
+    saveVault(vaultItems.filter((item) => item.id !== itemId));
+  }
+
+  function exportVault() {
+    downloadTextFile('acquiraiq-deal-vault.json', JSON.stringify(vaultItems, null, 2), 'application/json');
+    setSaveMessage('Deal Vault exported');
+  }
+
   return (
     <main className="page analyzer-page">
       <section className="module-header">
@@ -1856,6 +1954,12 @@ function AirbnbAnalyzerPage() {
           <p className="eyebrow">Early access module</p>
           <h1>Airbnb Analyzer</h1>
           <p>Compare short-term rental performance against a long-term rental baseline using clear occupancy assumptions.</p>
+        </div>
+        <div className="module-header-actions">
+          {saveMessage && <span>{saveMessage}</span>}
+          <button className="primary-btn" type="button" onClick={saveCurrentDeal}>
+            Save Opportunity
+          </button>
         </div>
       </section>
 
@@ -1868,13 +1972,14 @@ function AirbnbAnalyzerPage() {
       <section className="analyzer-grid">
         <div className="panel input-panel">
           <PanelHeading label="Inputs" title="Serviced Accommodation Assumptions" meta="Early access" />
+          <DealIdentityForm dealName={dealName} setDealName={setDealName} dealNote={dealNote} setDealNote={setDealNote} />
           <ScenarioToggle scenario={scenario} setScenario={setScenario} />
           <InputSections groupedFields={groupFields(airbnbFields)} inputs={inputs} updateInput={updateInput} />
         </div>
 
         <div className="panel analysis-workspace">
           <PanelHeading label="Analysis" title="Airbnb Decision Workspace" meta="Estimate" />
-          <AnalysisTabs activeTab={activeTab} setActiveTab={setActiveTab} hideSaved />
+          <AnalysisTabs activeTab={activeTab} setActiveTab={setActiveTab} />
 
           {activeTab === 'overview' && (
             <div className="tab-panel">
@@ -1937,6 +2042,21 @@ function AirbnbAnalyzerPage() {
               </div>
             </div>
           )}
+
+          {activeTab === 'saved' && (
+            <div className="tab-panel">
+              <DealVaultPanel
+                vaultItems={vaultItems}
+                saveScenario={saveScenario}
+                noteDraft={noteDraft}
+                setNoteDraft={setNoteDraft}
+                addNote={addNote}
+                deleteVaultItem={deleteVaultItem}
+                exportVault={exportVault}
+              />
+              <SaveCompareFramework />
+            </div>
+          )}
         </div>
       </section>
     </main>
@@ -1995,13 +2115,16 @@ function PlatformPage() {
           <p>Professional decision tools designed to sharpen judgement, challenge assumptions and support faster go/no-go decisions.</p>
         </div>
         <div className="premium-preview-grid">
-          <PremiumPreview title="AI Investor Verdicts" copy="Turn raw outputs into clear judgement: verdict, risk, strength, best strategy and suitability." />
-          <PremiumPreview title="Deal Health Checks" copy="See whether cashflow, yield, refinance and risk buffer are strong enough for further diligence." />
-          <PremiumPreview title="Sensitivity Analysis" copy="Stress-test rent, rates, GDV and occupancy before relying on a headline return." />
-          <PremiumPreview title="Strategy Comparison" copy="Compare BRRR, Airbnb and BTL side by side with a recommended strategy." />
-          <PremiumPreview title="Unlimited Saved Deals" copy="Build a disciplined acquisition pipeline without losing scenarios or notes." />
-          <PremiumPreview title="PDF Investment Reports" copy="Open a print-ready investment report that can be saved as a PDF from the browser." />
-          <PremiumPreview title="Advanced Scenario Testing" copy="Compare conservative, expected and optimistic cases for cashflow, capital left and ROI." />
+          <PremiumPreview label="Pro preview" title="Advanced Investor Verdict" copy="A second-opinion layer that explains cashflow, refinance risk, suitability and next actions in plain investor language." />
+          <PremiumPreview label="Pro preview" title="Scenario Testing" copy="Stress-test conservative, expected and optimistic cases before relying on a headline return." />
+          <PremiumPreview label="Pro preview" title="Advanced Sensitivity Analysis" copy="See how rent, rates, GDV and occupancy changes affect the decision before offer stage." />
+          <PremiumPreview label="Pro preview" title="Strategy Comparison" copy="Compare BRRR, Airbnb and BTL side by side with a recommended strategy and risk context." />
+          <PremiumPreview label="Pro preview" title="PDF Investment Reports" copy="Create a clean browser print report that can be saved as a PDF for partners, lenders or your own file." />
+          <PremiumPreview label="Pro preview" title="Unlimited Saved Deals" copy="Build a larger acquisition pipeline without losing scenarios, notes or assumptions." />
+        </div>
+        <div className="conversion-actions">
+          <Link className="primary-link" to="/pricing">Upgrade to Pro</Link>
+          <Link className="secondary-link" to="/brrr">Analyse Deal</Link>
         </div>
       </section>
 
@@ -2009,14 +2132,21 @@ function PlatformPage() {
         <div>
           <p className="eyebrow">Premium</p>
           <h2>Build Your Investment Operating System</h2>
-          <p>Manage opportunities, acquisitions and portfolio performance from a single workspace.</p>
+          <p>Scale from individual deal analysis into a repeatable system for acquisitions, owned assets, relationships and growth.</p>
         </div>
         <div className="premium-preview-grid">
-          <PremiumPreview title="Portfolio Tracker" copy="Monitor live assets, rent, debt, equity movement and portfolio-level yield." />
-          <PremiumPreview title="Deal Pipeline" copy="Move opportunities from sourced to analysed, offered, financed and completed." />
-          <PremiumPreview title="Growth Forecasting" copy="Understand how retained cashflow, equity and refinance capacity support the next acquisition." />
-          <PremiumPreview title="Deal Vault" copy="Store the evidence behind each decision: assumptions, notes, scenarios and reports." />
-          <PremiumPreview title="Investor Contacts" copy="Track brokers, agents, sourcers, lenders and partners around your acquisition workflow." />
+          <PremiumPreview label="Working beta" title="Portfolio Tracking" copy="Monitor property values, rent, debt and equity from one simple workspace." />
+          <PremiumPreview label="Working beta" title="Deal Pipeline" copy="Move opportunities from lead to analysing, offered, under offer and purchased." />
+          <PremiumPreview label="Premium preview" title="Growth Forecasting" copy="Model portfolio value, rent growth and equity movement as your assets mature." />
+          <PremiumPreview label="Working beta" title="Deal Vault" copy="Store the evidence behind each decision: assumptions, notes, scenarios and reports." />
+          <PremiumPreview label="Premium preview" title="Investor CRM" copy="Keep brokers, agents, sourcers, lenders and partners close to the acquisition workflow." />
+          <PremiumPreview label="Roadmap" title="Marketplace Access" copy="A future route to vetted opportunities, data partners and deal-flow integrations." />
+          <PremiumPreview label="Roadmap" title="Team Features" copy="Future collaboration for partners and teams once accounts, billing and permissions are live." />
+          <PremiumPreview label="Premium preview" title="Advanced Reporting" copy="Portfolio-level reporting for capital, income, equity and acquisition progress." />
+        </div>
+        <div className="conversion-actions">
+          <Link className="primary-link" to="/pricing">Unlock Premium</Link>
+          <Link className="secondary-link" to="/portfolio">Open Portfolio</Link>
         </div>
       </section>
 
@@ -2054,15 +2184,15 @@ function PricingPage() {
       name: 'Pro',
       price: '£12/mo',
       badge: 'Recommended',
-      copy: 'For investors actively reviewing opportunities every month.',
-      items: ['Unlimited local scenarios', 'Investor Verdict Engine', 'Strategy Comparison', 'PDF-style report export', 'Advanced scenario testing'],
+      copy: 'For investors who want faster analysis, clearer risks and better decision records.',
+      items: ['Advanced Investor Verdict', 'Scenario Testing', 'Advanced Sensitivity Analysis', 'Strategy Comparison', 'PDF Investment Reports', 'Unlimited Saved Deals'],
     },
     {
       name: 'Premium',
       price: '£29/mo',
       badge: 'Future',
-      copy: 'For portfolio builders who need workflow, pipeline and reporting tools.',
-      items: ['Portfolio tracker', 'Deal pipeline', 'Growth forecasting', 'Investor contacts', 'Deal Vault workflow'],
+      copy: 'For portfolio builders who want a full operating system around acquisitions and assets.',
+      items: ['Portfolio Tracking', 'Deal Pipeline', 'Growth Forecasting', 'Investor CRM', 'Marketplace Access', 'Team Features', 'Advanced Reporting'],
     },
   ];
 
@@ -2103,7 +2233,7 @@ function PricingPage() {
               {plan.items.map((item) => <li key={item}>{item}</li>)}
             </ul>
             <button className={plan.name === 'Pro' ? 'primary-btn' : 'secondary-btn'} type="button" onClick={() => choosePlan(plan)}>
-              {plan.name === 'Free' ? 'Use Free' : `Register interest in ${plan.name}`}
+              {plan.name === 'Free' ? 'Start Free' : plan.name === 'Pro' ? 'Upgrade to Pro' : 'Unlock Premium'}
             </button>
           </article>
         ))}
@@ -2170,13 +2300,14 @@ function VaultPage() {
         <div className="hero-actions">
           <button className="primary-btn" type="button" onClick={exportVault}>Export Vault</button>
           <Link className="secondary-link" to="/brrr">Add BRRR Deal</Link>
+          <Link className="secondary-link" to="/airbnb">Add Airbnb Deal</Link>
         </div>
       </section>
 
       {vaultItems.length === 0 ? (
         <section className="empty-state">
           <strong>No vault items yet</strong>
-          <p>Save a deal, scenario or note from the BRRR analyzer to start building your decision record.</p>
+          <p>Save a BRRR or Airbnb opportunity to start building your investment opportunity database.</p>
         </section>
       ) : (
         <section className="vault-page-grid">
@@ -2356,6 +2487,22 @@ function TermsPage() {
         ['User responsibility', 'You are responsible for verifying assumptions, market data, lending terms, tax position and legal obligations.'],
         ['Beta software', 'Features may change while the platform is being prepared for paid subscriptions. Export important data regularly.'],
         ['Future payments', 'Paid plans are shown for product validation. Payment processing is not active until Stripe or another processor is connected.'],
+      ]}
+    />
+  );
+}
+
+function NotFinancialAdvicePage() {
+  return (
+    <LegalPage
+      label="Important"
+      title="Not Financial Advice"
+      copy="AcquiraIQ provides estimates for educational and planning purposes only and does not provide financial advice."
+      sections={[
+        ['Decision support only', 'The platform helps organise assumptions, calculations and investor notes. It does not decide whether a property is suitable for you.'],
+        ['Verify assumptions', 'Rent, GDV/ARV, refurb budgets, finance terms, tax, licensing and local regulation should be checked with appropriate professionals.'],
+        ['Your responsibility', 'You remain responsible for investment decisions, due diligence, lender discussions and legal or tax obligations.'],
+        ['Why this matters', 'Conservative estimates and transparent assumptions are more useful than marketing-style ROI claims when assessing property risk.'],
       ]}
     />
   );
@@ -2674,7 +2821,7 @@ function PipelinePage() {
       <section className="page-hero compact">
         <p className="eyebrow">Acquisition Pipeline</p>
         <h1>Move deals from lead to purchased</h1>
-        <p>Track opportunities through the investor workflow: Analyse Deal, Save Deal, Move To Pipeline, Add To Portfolio.</p>
+        <p>Track opportunities through the investor workflow: Analyse Deal, Save Opportunity, Move To Pipeline, Add To Portfolio.</p>
       </section>
 
       <section className="upgrade-strip glass-card">
@@ -2694,7 +2841,12 @@ function PipelinePage() {
           <div className="pipeline-column panel" key={stage}>
             <PanelHeading label="Stage" title={stage} meta={`${pipelineDeals.filter((deal) => deal.stage === stage).length}`} />
             <div className="vault-list">
-              {pipelineDeals.filter((deal) => deal.stage === stage).map((deal) => (
+              {pipelineDeals.filter((deal) => deal.stage === stage).length === 0 ? (
+                <div className="empty-state compact-empty">
+                  <strong>No {stage.toLowerCase()} deals</strong>
+                  <p>Move an opportunity here when it reaches this stage.</p>
+                </div>
+              ) : pipelineDeals.filter((deal) => deal.stage === stage).map((deal) => (
                 <article className="vault-record" key={deal.id}>
                   <span>{deal.strategy || 'Deal'}</span>
                   <strong>{deal.title}</strong>
@@ -2975,19 +3127,19 @@ function SaveCompareFramework() {
   return (
     <div className="compare-framework">
       <span>Save & compare framework</span>
-      <p>Saved scenarios and side-by-side deal comparison are prepared for future portfolio tracking.</p>
+      <p>Saved scenarios, notes and print-ready PDF reports form the decision record for this opportunity.</p>
       <div>
         <small>Advanced scenario analysis · Pro</small>
-        <small>Export report · Pro</small>
+        <small>PDF investment reports · Pro</small>
       </div>
     </div>
   );
 }
 
-function PremiumPreview({ title, copy }) {
+function PremiumPreview({ title, copy, label = 'Future upgrade' }) {
   return (
     <article className="premium-preview-card">
-      <span>Future upgrade</span>
+      <span>{label}</span>
       <h3>{title}</h3>
       <p>{copy}</p>
     </article>
@@ -3338,9 +3490,7 @@ function RoadmapCard({ title, badge, copy }) {
         <h2>{title}</h2>
         <p>{copy}</p>
       </div>
-      <button className="module-action muted" type="button">
-        Preview
-      </button>
+      <span className="module-action muted static">Roadmap preview</span>
     </article>
   );
 }

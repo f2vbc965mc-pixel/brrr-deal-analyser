@@ -396,7 +396,7 @@ p {
 }
 
 .dashboard-summary {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
 }
 
 .membership-grid {
@@ -415,9 +415,9 @@ p {
 .roadmap-block,
 .deal-vault {
   display: grid;
-  gap: 20px;
-  margin-bottom: 18px;
-  padding: 24px;
+  gap: 22px;
+  margin-bottom: 22px;
+  padding: 26px;
 }
 
 .progress-panel .dashboard-summary {
@@ -467,6 +467,14 @@ p {
     border-color 0.24s ease,
     background 0.24s ease,
     box-shadow 0.24s ease;
+}
+
+.conversion-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  padding-top: 4px;
 }
 
 .feature-card:hover,
@@ -927,6 +935,11 @@ p {
   color: #b9b0a5;
 }
 
+.module-action.static {
+  cursor: default;
+  pointer-events: none;
+}
+
 .module-header {
   margin-bottom: 18px;
 }
@@ -973,6 +986,7 @@ p {
   color: #f5f1e8;
   font-size: clamp(2rem, 4vw, 3.3rem);
   line-height: 1;
+  overflow-wrap: anywhere;
 }
 
 .summary-card p {
@@ -1539,6 +1553,18 @@ p {
   background: rgba(245, 241, 232, 0.035);
 }
 
+.compact-empty {
+  padding: 14px;
+}
+
+.compact-empty strong {
+  font-size: 0.86rem;
+}
+
+.compact-empty p {
+  font-size: 0.78rem;
+}
+
 .empty-state strong {
   display: block;
   margin-bottom: 6px;
@@ -1763,7 +1789,7 @@ p {
 }
 
 .footer-note p {
-  max-width: 780px;
+  max-width: 980px;
   margin-bottom: 0;
   text-align: right;
 }
