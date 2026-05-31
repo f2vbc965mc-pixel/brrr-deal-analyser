@@ -1,5 +1,5 @@
-import React, { useMemo, useRef, useState } from 'react';
-import { Link, NavLink, Outlet, Route, Routes, useNavigate } from 'react-router-dom';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Link, NavLink, Outlet, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 
 const STORAGE_KEY = 'brrr-saved-deals';
 const VAULT_STORAGE_KEY = 'acquiraiq-deal-vault';
@@ -40,6 +40,8 @@ const brrrFields = [
 ];
 
 const initialAirbnbInputs = {
+  purchasePrice: '200000',
+  currentMarketValue: '220000',
   propertyValue: '220000',
   longTermRent: '1200',
   nightlyRate: '110',
@@ -55,7 +57,8 @@ const initialAirbnbInputs = {
 };
 
 const airbnbFields = [
-  { name: 'propertyValue', label: 'Property value / purchase price', prefix: '£', helper: 'Used for yield and return context.', group: 'Property', max: 10000000 },
+  { name: 'purchasePrice', label: 'Purchase price', prefix: '£', helper: 'Actual acquisition price or expected offer price.', group: 'Property', max: 10000000 },
+  { name: 'currentMarketValue', label: 'Current market value', prefix: '£', helper: 'Estimated open market value used for equity and discount checks.', group: 'Property', max: 10000000 },
   { name: 'longTermRent', label: 'Existing long-term monthly rent', prefix: '£', helper: 'Baseline rent for comparison against Airbnb.', group: 'Property', max: 100000 },
   { name: 'nightlyRate', label: 'Expected nightly rate', prefix: '£', helper: 'Average achieved nightly rate before platform costs.', group: 'Revenue', max: 5000 },
   { name: 'occupancy', label: 'Expected occupancy', suffix: '%', helper: 'Estimated average monthly occupancy.', group: 'Revenue', max: 100 },
@@ -79,6 +82,16 @@ function normalizeInputs(inputs, defaults = initialInputs) {
   return Object.fromEntries(
     Object.entries(defaults).map(([key]) => [key, inputs?.[key] === undefined ? '' : String(inputs[key])]),
   );
+}
+
+function normalizeAirbnbInputs(inputs = {}) {
+  const mergedInputs = {
+    ...inputs,
+    purchasePrice: inputs.purchasePrice ?? inputs.propertyValue ?? initialAirbnbInputs.purchasePrice,
+    currentMarketValue: inputs.currentMarketValue ?? inputs.propertyValue ?? initialAirbnbInputs.currentMarketValue,
+    propertyValue: inputs.propertyValue ?? inputs.currentMarketValue ?? initialAirbnbInputs.propertyValue,
+  };
+  return normalizeInputs(mergedInputs, initialAirbnbInputs);
 }
 
 function formatMoney(value) {
@@ -135,43 +148,59 @@ function calculateStampDuty(price) {
 }
 
 function getDealRating(metrics) {
-  const hasPositiveCashflow = metrics.monthlyCashflow > 0;
+  const cashLeftRatio = metrics.totalCashInvested > 0 ? metrics.cashLeftInDeal / metrics.totalCashInvested : 1;
+  const refinanceRecovery = metrics.totalCashInvested > 0 ? metrics.refinanceLoan / metrics.totalCashInvested : 0;
+  const returnOnTotalCapitalInvested = metrics.returnOnTotalCapitalInvested ?? metrics.cashOnCashRoi ?? 0;
+  let score = 0;
 
-  if (hasPositiveCashflow && metrics.grossYield >= 8 && metrics.cashOnCashRoi >= 6) {
-    return { tone: 'strong', label: 'Excellent', feedback: 'High-performing deal based on cashflow, yield and investor return.' };
+  score += metrics.monthlyCashflow >= 500 ? 24 : metrics.monthlyCashflow >= 250 ? 19 : metrics.monthlyCashflow > 0 ? 13 : 0;
+  score += metrics.grossYield >= 8 ? 18 : metrics.grossYield >= 6.5 ? 14 : metrics.grossYield >= 5 ? 9 : 2;
+  score += returnOnTotalCapitalInvested >= 8 ? 18 : returnOnTotalCapitalInvested >= 5 ? 13 : returnOnTotalCapitalInvested >= 2.5 ? 8 : 1;
+  score += cashLeftRatio <= 0.15 ? 18 : cashLeftRatio <= 0.3 ? 14 : cashLeftRatio <= 0.5 ? 8 : 2;
+  score += refinanceRecovery >= 0.9 ? 12 : refinanceRecovery >= 0.75 ? 9 : refinanceRecovery >= 0.6 ? 5 : 1;
+  score += metrics.equityCreated > 0 ? 10 : 0;
+
+  if (metrics.monthlyCashflow <= 0) score = Math.min(score, 42);
+  if (cashLeftRatio > 0.7) score = Math.min(score, 55);
+  if (metrics.grossYield < 4.5) score = Math.min(score, 58);
+
+  if (score >= 82) {
+    return { tone: 'strong', label: 'Excellent', score, feedback: 'Strong cashflow, efficient refinance recovery and attractive income return.' };
   }
-
-  if (hasPositiveCashflow && metrics.grossYield >= 6 && metrics.cashOnCashRoi >= 4) {
-    return { tone: 'strong', label: 'Strong', feedback: 'Solid fundamentals with positive cashflow and acceptable return on cash.' };
+  if (score >= 68) {
+    return { tone: 'strong', label: 'Good', score, feedback: 'A good candidate if valuation, rent and finance assumptions are independently verified.' };
   }
-
-  if (hasPositiveCashflow && (metrics.grossYield >= 4 || metrics.cashOnCashRoi >= 2)) {
-    return { tone: 'borderline', label: 'Average', feedback: 'Viable on headline numbers, but review costs, valuation and downside risk.' };
+  if (score >= 50) {
+    return { tone: 'borderline', label: 'Average', score, feedback: 'Workable on some metrics, but not strong enough to progress without careful diligence.' };
   }
-
-  return { tone: 'risk', label: 'Weak', feedback: 'Weak cashflow or low return. This deal needs further scrutiny.' };
+  if (score >= 34) {
+    return { tone: 'risk', label: 'Weak', score, feedback: 'Weak risk-adjusted profile based on cashflow, yield or capital recycling.' };
+  }
+  return { tone: 'risk', label: 'Poor', score, feedback: 'Poor candidate under the current assumptions.' };
 }
 
 function getDealVerdict(metrics) {
   if (metrics.monthlyCashflow <= 0) {
-    return 'This deal does not currently produce positive monthly cashflow after finance and operating assumptions.';
+    return 'This deal does not currently produce positive monthly cashflow after finance and operating assumptions. It should not progress unless rent, price or finance terms improve.';
+  }
+
+  if (metrics.rating?.label === 'Excellent') {
+    return 'This deal combines positive cashflow, strong yield and efficient capital recycling. It may justify deeper diligence if the ARV and lending assumptions are reliable.';
   }
 
   if (metrics.cashLeftInDeal > metrics.totalCashInvested * 0.45) {
-    return 'This deal produces positive cashflow but leaves significant capital in the deal after refinance.';
+    return 'This deal produces positive cashflow but leaves significant capital tied up after refinance. Review whether the retained capital meets your strategy.';
   }
 
-  if (metrics.cashOnCashRoi >= 6 && metrics.cashLeftInDeal <= metrics.totalCashInvested * 0.3) {
-    return 'This deal shows positive cashflow, a reasonable cash-on-cash return and a relatively efficient refinance position.';
-  }
-
-  return 'This deal produces positive cashflow, but the return and refinance position should be reviewed against your target criteria.';
+  return 'This deal produces positive cashflow, but yield, return and refinance efficiency should be reviewed against your target criteria before offer stage.';
 }
 
 function migrateOldSavedMetrics(metrics = {}) {
-  const cashOnCashRoi =
-    metrics.cashOnCashRoi ?? (metrics.totalCashInvested > 0 ? (metrics.annualCashflow / metrics.totalCashInvested) * 100 : 0);
-  const migratedMetrics = { ...metrics, cashOnCashRoi };
+  const returnOnTotalCapitalInvested =
+    metrics.returnOnTotalCapitalInvested ?? metrics.cashOnCashRoi ?? (metrics.totalCashInvested > 0 ? (metrics.annualCashflow / metrics.totalCashInvested) * 100 : 0);
+  const brrrCashOnCashReturn =
+    metrics.brrrCashOnCashReturn ?? (metrics.cashLeftInDeal > 0 ? (metrics.annualCashflow / metrics.cashLeftInDeal) * 100 : null);
+  const migratedMetrics = { ...metrics, cashOnCashRoi: returnOnTotalCapitalInvested, returnOnTotalCapitalInvested, brrrCashOnCashReturn };
   return { ...migratedMetrics, rating: metrics.rating || getDealRating(migratedMetrics) };
 }
 
@@ -242,14 +271,19 @@ function addDealToPipeline(deal, stage = 'Lead') {
   const pipelineDeals = loadPipelineDeals();
   const title = deal.name || deal.title || 'Untitled opportunity';
   const existingIndex = pipelineDeals.findIndex((item) => item.sourceDealId === deal.id || item.title === title);
+  const sourceInputs = deal.inputs || {};
   const pipelineDeal = {
     id: existingIndex >= 0 ? pipelineDeals[existingIndex].id : crypto.randomUUID(),
     sourceDealId: deal.id || deal.dealId || null,
     title,
     stage,
     strategy: deal.strategy || deal.type || 'BRRR',
+    askingPrice: deal.askingPrice ?? toNumber(sourceInputs.purchasePrice || sourceInputs.propertyValue),
+    source: deal.source || 'Saved analysis',
+    notes: deal.notes || deal.copy || '',
     monthlyProfit: deal.metrics?.monthlyCashflow ?? deal.metrics?.monthlyProfit ?? null,
     yield: deal.metrics?.grossYield ?? deal.metrics?.airbnbYield ?? null,
+    dateAdded: deal.dateAdded || deal.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
   const nextPipelineDeals = existingIndex >= 0
@@ -267,7 +301,7 @@ function addDealToPortfolio(deal) {
     sourceDealId: deal.id || deal.dealId || null,
     name: deal.name || deal.title || 'Portfolio property',
     purchasePrice: toNumber(sourceInputs.purchasePrice || sourceInputs.propertyValue),
-    currentValue: toNumber(sourceInputs.refinanceValue || sourceInputs.propertyValue || sourceInputs.purchasePrice),
+    currentValue: toNumber(sourceInputs.refinanceValue || sourceInputs.currentMarketValue || sourceInputs.propertyValue || sourceInputs.purchasePrice),
     monthlyRent: toNumber(sourceInputs.monthlyRent || sourceInputs.longTermRent),
     mortgageBalance: deal.metrics?.refinanceLoan || 0,
     createdAt: new Date().toISOString(),
@@ -414,7 +448,7 @@ function getDashboardStats() {
         createdAt: item.createdAt,
       })),
   ].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-  const bestRoi = savedDeals.reduce((best, deal) => Math.max(best, deal.metrics?.cashOnCashRoi || 0), 0);
+  const bestRoi = savedDeals.reduce((best, deal) => Math.max(best, deal.metrics?.returnOnTotalCapitalInvested ?? deal.metrics?.cashOnCashRoi ?? 0), 0);
   const bestCashflow = savedDeals.reduce((best, deal) => Math.max(best, deal.metrics?.monthlyCashflow || 0), 0);
   const portfolioTotals = portfolioProperties.reduce(
     (summary, property) => ({
@@ -514,11 +548,14 @@ function getBrrrHealth(metrics) {
   if (metrics.grossYield >= 6) strengths.push('Gross yield is within or above a typical investable UK BTL range.');
   else risks.push('Gross yield is below many common UK BTL target ranges.');
 
-  if (metrics.cashOnCashRoi >= 4) strengths.push('Cash-on-cash ROI is supported by annual cashflow rather than refinance uplift.');
-  else risks.push('Cash-on-cash ROI is modest relative to total cash invested.');
+  if (metrics.returnOnTotalCapitalInvested >= 4) strengths.push('Return on total capital invested is supported by annual cashflow rather than refinance uplift.');
+  else risks.push('Return on total capital invested is modest relative to total cash invested.');
 
   if (metrics.cashLeftInDeal <= metrics.totalCashInvested * 0.3) strengths.push('Refinance appears to recycle a meaningful share of invested capital.');
   else risks.push('A significant amount of capital remains tied up after refinance.');
+
+  if (metrics.equityCreated > 0) strengths.push('The model shows equity created between total project cost and estimated post-refurb value.');
+  else risks.push('The post-refurb value does not yet show a clear equity margin above project cost.');
 
   if (metrics.breakEvenRent > metrics.effectiveMonthlyRent) opportunities.push('Improving rent, reducing costs or negotiating finance would strengthen cashflow resilience.');
   if (metrics.breakEvenRefinanceValue > metrics.refinanceValue) opportunities.push('A higher verified post-refurb valuation would improve capital recycling.');
@@ -598,8 +635,11 @@ function getAirbnbHealth(metrics) {
   if (metrics.monthlyProfit > 0) strengths.push('Short-term rental assumptions produce positive monthly profit.');
   else risks.push('Short-term rental assumptions do not currently produce positive profit.');
 
-  if (metrics.monthlyDifference > 0) strengths.push('Airbnb outperforms the long-term rental baseline on monthly profit.');
-  else risks.push('Long-term rent appears safer or stronger under these assumptions.');
+  if (metrics.compareAgainstBtl) {
+    if (metrics.monthlyDifference > 150) strengths.push('Airbnb outperforms the long-term rental baseline on monthly profit.');
+    else if (metrics.monthlyDifference < -150) risks.push('Long-term rent appears safer or stronger under these assumptions.');
+    else opportunities.push('Airbnb and BTL are close enough that regulation, workload and seasonality may decide the strategy.');
+  }
 
   if (metrics.paybackMonths > 0 && metrics.paybackMonths <= 18) strengths.push('Setup cost payback is within a relatively short operating period.');
   else opportunities.push('Review furnishing/setup costs and pricing to improve payback period.');
@@ -616,7 +656,9 @@ function getAirbnbInsights(metrics) {
   return [
     {
       title: 'Strategy insight',
-      copy: metrics.monthlyDifference >= 0
+      copy: !metrics.compareAgainstBtl
+        ? 'BTL comparison is switched off, so review the Airbnb model as a standalone operating business.'
+        : metrics.monthlyDifference >= 0
         ? 'Short-term rental may justify the extra operational complexity under these assumptions.'
         : 'The long-term rental baseline may offer a cleaner risk-adjusted outcome.',
     },
@@ -629,6 +671,48 @@ function getAirbnbInsights(metrics) {
       copy: 'Airbnb returns are highly sensitive to regulation, seasonality, reviews and operator quality.',
     },
   ];
+}
+
+function getAirbnbRecommendation(metrics) {
+  if (!metrics.compareAgainstBtl) {
+    return {
+      label: 'Standalone Airbnb Review',
+      tone: 'borderline',
+      confidence: metrics.breakEvenOccupancy <= 60 ? 'Medium' : 'Low',
+      reasoning: 'BTL comparison is switched off. Review Airbnb profit, occupancy resilience and local regulation as a standalone operating model.',
+    };
+  }
+
+  const difference = metrics.monthlyDifference;
+  const costRatio = metrics.grossMonthlyRevenue > 0 ? metrics.operatingCosts / metrics.grossMonthlyRevenue : 1;
+  const occupancyRisk = metrics.occupancy >= 75 || metrics.breakEvenOccupancy >= 70;
+  const highCostRisk = costRatio >= 0.72;
+  const confidence = occupancyRisk || highCostRisk ? 'Medium' : Math.abs(difference) >= 350 ? 'High' : 'Medium';
+  const reasonParts = [];
+
+  if (difference >= 0) reasonParts.push(`Airbnb is ahead by ${formatMoney(difference)} per month before tax.`);
+  else reasonParts.push(`BTL is ahead by ${formatMoney(Math.abs(difference))} per month before tax.`);
+  if (occupancyRisk) reasonParts.push('The result is sensitive to occupancy, so local demand needs evidence.');
+  if (highCostRisk) reasonParts.push('Operating costs absorb a high share of revenue.');
+  if (!occupancyRisk && !highCostRisk) reasonParts.push('Occupancy and cost assumptions leave a clearer operating buffer.');
+
+  let label = 'Roughly Equal';
+  let tone = 'borderline';
+  if (difference >= 500) {
+    label = 'Strong Airbnb Advantage';
+    tone = 'strong';
+  } else if (difference >= 150) {
+    label = 'Moderate Airbnb Advantage';
+    tone = 'strong';
+  } else if (difference <= -500) {
+    label = 'Strong BTL Advantage';
+    tone = 'risk';
+  } else if (difference <= -150) {
+    label = 'Moderate BTL Advantage';
+    tone = 'borderline';
+  }
+
+  return { label, tone, confidence, reasoning: reasonParts.join(' ') };
 }
 
 function getBrrrHealthSummary(metrics) {
@@ -682,6 +766,7 @@ function getAirbnbHealthSummary(metrics) {
 }
 
 function getSignatureVerdict(strategy, metrics, health) {
+  const airbnbRecommendation = strategy === 'Airbnb' ? getAirbnbRecommendation(metrics) : null;
   const mainStrength = health.strengths[0] || 'The model has enough assumptions to support a structured first review.';
   const mainRisk = health.risks[0] || 'The key risk is still assumption quality: validate rent, costs, finance and market demand.';
   const recommendations =
@@ -689,6 +774,7 @@ function getSignatureVerdict(strategy, metrics, health) {
       ? [
           metrics.cashLeftInDeal > metrics.totalCashInvested * 0.45 ? 'Negotiate purchase price, improve GDV confidence or review LTV before relying on capital recycling.' : 'Validate the refinance valuation with local comparables and broker feedback.',
           metrics.monthlyCashflow <= 0 ? 'Do not progress without improving rent, costs or finance terms.' : 'Stress-test rent and interest rate assumptions before offer stage.',
+          metrics.equityCreated <= 0 ? 'Re-check the refurb budget and ARV because the model does not show equity created.' : 'Confirm that the equity created is supported by sold comparables, not asking prices.',
         ]
       : [
           metrics.breakEvenOccupancy > 70 ? 'Validate occupancy with comparable listings before treating this as an investable SA opportunity.' : 'Check local regulation, cleaning logistics and management cost before comparing against BTL.',
@@ -699,9 +785,13 @@ function getSignatureVerdict(strategy, metrics, health) {
       ? metrics.cashLeftInDeal <= metrics.totalCashInvested * 0.35
         ? 'BRRR, if the post-refurb valuation and lending terms are independently confirmed.'
         : 'BTL or a longer hold may be more appropriate unless the refinance position improves.'
-      : metrics.monthlyDifference >= 0
-        ? 'Airbnb, if local demand, regulation and management capacity are validated.'
-        : 'BTL, because the simpler rental baseline currently looks safer.';
+      : !metrics.compareAgainstBtl
+        ? 'Airbnb standalone review, because BTL comparison is switched off.'
+        : metrics.monthlyDifference >= 150
+          ? 'Airbnb, if local demand, regulation and management capacity are validated.'
+          : metrics.monthlyDifference <= -150
+            ? 'BTL, because the simpler rental baseline currently looks safer.'
+            : 'No clear winner; compare operational workload, regulation and financing risk.';
   const investorSuitability =
     strategy === 'BRRR'
       ? metrics.cashLeftInDeal <= metrics.totalCashInvested * 0.35 && metrics.monthlyCashflow > 0
@@ -715,9 +805,7 @@ function getSignatureVerdict(strategy, metrics, health) {
     overallVerdict:
       strategy === 'BRRR'
         ? `${metrics.rating?.label || 'Reviewed'} BRRR candidate based on current cashflow, yield and refinance assumptions.`
-        : metrics.monthlyDifference >= 0
-          ? 'Airbnb may outperform the BTL baseline under the current assumptions.'
-          : 'BTL may be safer based on the current short-term rental assumptions.',
+        : `${airbnbRecommendation.label}. ${airbnbRecommendation.reasoning}`,
     mainStrength,
     mainRisk,
     strengths: health.strengths.slice(0, 3),
@@ -726,7 +814,7 @@ function getSignatureVerdict(strategy, metrics, health) {
     benchmarkInsights: strategy === 'BRRR'
       ? [
           metrics.grossYield >= 6 ? 'Yield is within a more investable screening range for many UK BTL investors.' : 'Yield is below many UK BTL screening ranges and needs a stronger reason to progress.',
-          metrics.cashOnCashRoi >= 4 ? 'Cash-on-cash ROI is based on income rather than refinance uplift.' : 'Income return is modest relative to total cash deployed.',
+          metrics.returnOnTotalCapitalInvested >= 4 ? 'Return on total capital invested is based on income rather than refinance uplift.' : 'Income return is modest relative to total cash deployed.',
         ]
       : [
           metrics.airbnbYield >= 8 ? 'Airbnb yield appears strong, but only if occupancy is achievable.' : 'Airbnb yield is not yet strong enough to ignore the BTL baseline.',
@@ -754,10 +842,10 @@ function getBrrrStrategyComparison(metrics) {
       strategy: 'BRRR',
       monthlyProfit: metrics.monthlyCashflow,
       yield: metrics.grossYield,
-      roi: metrics.cashOnCashRoi,
+      roi: metrics.returnOnTotalCapitalInvested,
       risk: metrics.cashLeftInDeal <= metrics.totalCashInvested * 0.35 ? 'Moderate' : 'Higher',
       capitalLeft: metrics.cashLeftInDeal,
-      score: metrics.monthlyCashflow + metrics.cashOnCashRoi * 45 - metrics.cashLeftInDeal / 1200,
+      score: metrics.monthlyCashflow + metrics.returnOnTotalCapitalInvested * 45 - metrics.cashLeftInDeal / 1200,
     },
     {
       strategy: 'Airbnb',
@@ -850,7 +938,9 @@ function createBrrrReport(inputs, metrics, verdict, comparison) {
     `Annual cashflow: ${formatMoney(metrics.annualCashflow)}`,
     `Gross yield: ${formatPercent(metrics.grossYield)}`,
     `Net yield: ${formatPercent(metrics.netYield)}`,
-    `Cash-on-cash ROI: ${formatPercent(metrics.cashOnCashRoi)}`,
+    `Return on total capital invested: ${formatPercent(metrics.returnOnTotalCapitalInvested)}`,
+    `BRRR cash-on-cash return: ${metrics.brrrCashOnCashReturn === null ? 'Capital Fully Recycled' : formatPercent(metrics.brrrCashOnCashReturn)}`,
+    `Equity created: ${formatMoney(metrics.equityCreated)}`,
     '',
     'Investor Verdict',
     `Overall verdict: ${verdict.overallVerdict}`,
@@ -861,7 +951,7 @@ function createBrrrReport(inputs, metrics, verdict, comparison) {
     '',
     'Strategy Comparison',
     `Recommended strategy: ${comparison.recommendation}`,
-    ...comparison.rows.map((row) => `${row.strategy}: monthly profit ${row.monthlyProfit === null ? 'N/A' : formatMoney(row.monthlyProfit)}, yield ${row.yield === null ? 'N/A' : formatPercent(row.yield)}, ROI ${row.roi === null ? 'N/A' : formatPercent(row.roi)}, risk ${row.risk}, capital left ${row.capitalLeft === null ? 'N/A' : formatMoney(row.capitalLeft)}`),
+    ...comparison.rows.map((row) => `${row.strategy}: monthly profit ${row.monthlyProfit === null ? 'N/A' : formatMoney(row.monthlyProfit)}, yield ${row.yield === null ? 'N/A' : formatPercent(row.yield)}, return ${row.roi === null ? 'N/A' : formatPercent(row.roi)}, risk ${row.risk}, capital left ${row.capitalLeft === null ? 'N/A' : formatMoney(row.capitalLeft)}`),
     '',
     'Important',
     'This report is an underwriting aid, not financial, tax or mortgage advice. Verify rent, GDV/ARV, refurb costs and finance terms independently.',
@@ -880,7 +970,9 @@ function createBrrrReportHtml(inputs, metrics, verdict, comparison, dealName) {
     ['Monthly cashflow', formatMoney(metrics.monthlyCashflow)],
     ['Annual cashflow', formatMoney(metrics.annualCashflow)],
     ['Gross yield', formatPercent(metrics.grossYield)],
-    ['Cash-on-cash ROI', formatPercent(metrics.cashOnCashRoi)],
+    ['Return on total capital invested', formatPercent(metrics.returnOnTotalCapitalInvested)],
+    ['BRRR cash-on-cash return', metrics.brrrCashOnCashReturn === null ? 'Capital Fully Recycled' : formatPercent(metrics.brrrCashOnCashReturn)],
+    ['Equity created', formatMoney(metrics.equityCreated)],
   ];
 
   return `<!doctype html>
@@ -917,7 +1009,7 @@ function createBrrrReportHtml(inputs, metrics, verdict, comparison, dealName) {
     <ul>${(verdict.recommendations || []).map((item) => `<li>${item}</li>`).join('')}</ul>
     <h2>Strategy Comparison</h2>
     <p><strong>Recommended strategy:</strong> ${comparison.recommendation}</p>
-    <ul>${comparison.rows.map((row) => `<li>${row.strategy}: monthly profit ${row.monthlyProfit === null ? 'N/A' : formatMoney(row.monthlyProfit)}, yield ${row.yield === null ? 'N/A' : formatPercent(row.yield)}, ROI ${row.roi === null ? 'N/A' : formatPercent(row.roi)}, risk ${row.risk}, capital left ${row.capitalLeft === null ? 'N/A' : formatMoney(row.capitalLeft)}</li>`).join('')}</ul>
+    <ul>${comparison.rows.map((row) => `<li>${row.strategy}: monthly profit ${row.monthlyProfit === null ? 'N/A' : formatMoney(row.monthlyProfit)}, yield ${row.yield === null ? 'N/A' : formatPercent(row.yield)}, return ${row.roi === null ? 'N/A' : formatPercent(row.roi)}, risk ${row.risk}, capital left ${row.capitalLeft === null ? 'N/A' : formatMoney(row.capitalLeft)}</li>`).join('')}</ul>
   </body>
 </html>`;
 }
@@ -945,11 +1037,11 @@ function getBrrrScenarioComparisonRows(inputs) {
     const monthlyCashflow = effectiveMonthlyRent - values.monthlyRunningCosts - monthlyMortgage;
     const annualCashflow = monthlyCashflow * 12;
     const cashLeftInDeal = Math.max(totalCashInvested - refinanceLoan, 0);
-    const cashOnCashRoi = totalCashInvested > 0 ? (annualCashflow / totalCashInvested) * 100 : 0;
+    const returnOnTotalCapitalInvested = totalCashInvested > 0 ? (annualCashflow / totalCashInvested) * 100 : 0;
 
     return {
       label: `${scenarioName[0].toUpperCase()}${scenarioName.slice(1)} case`,
-      value: `${formatMoney(monthlyCashflow)} cashflow · ${formatMoney(cashLeftInDeal)} left · ${formatPercent(cashOnCashRoi)} ROI`,
+      value: `${formatMoney(monthlyCashflow)} cashflow · ${formatMoney(cashLeftInDeal)} left · ${formatPercent(returnOnTotalCapitalInvested)} ROTCI`,
     };
   });
 }
@@ -997,6 +1089,16 @@ function App() {
   );
 }
 
+function ScrollToTop() {
+  const { pathname } = useLocation();
+
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+  }, [pathname]);
+
+  return null;
+}
+
 function Shell() {
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -1038,6 +1140,7 @@ function Shell() {
           </Link>
         </div>
       </nav>
+      <ScrollToTop />
       <Outlet />
       <footer className="footer-note">
         <span>AcquiraIQ</span>
@@ -1104,7 +1207,7 @@ function LandingPage() {
           </div>
           <div className="preview-grid">
             <span>
-              <small>Cash-on-cash ROI</small>
+              <small>Total capital return</small>
               4.8%
             </span>
             <span>
@@ -1128,7 +1231,7 @@ function LandingPage() {
         <div className="feature-grid">
           <FeatureCard
             title="BRRR Deal Analysis"
-            copy="Analyse purchase, refurb, refinance and cashflow with cash-on-cash ROI and capital-left-in metrics."
+            copy="Analyse purchase, refurb, refinance and cashflow with total capital return and capital-left-in metrics."
           />
           <FeatureCard
             title="Airbnb Comparison"
@@ -1151,8 +1254,24 @@ function LandingPage() {
         />
         <div className="workflow-grid">
           <WorkflowStep number="1" title="Enter deal details" copy="Capture purchase, rent, finance and cost assumptions." />
-          <WorkflowStep number="2" title="Review investor metrics" copy="Focus on cashflow, yield, cash left in and cash-on-cash ROI." />
+          <WorkflowStep number="2" title="Review investor metrics" copy="Focus on cashflow, yield, cash left in and return on total capital invested." />
           <WorkflowStep number="3" title="Save, pipeline and track" copy="Keep a record of opportunities, move them forward and add purchased assets to your portfolio." />
+        </div>
+      </section>
+
+      <section className="platform-section glass-card">
+        <SectionHeading
+          label="Upgrade path"
+          title="Built to grow with serious investors"
+          copy="Start with free analysis and saved opportunities. Pro and Premium workflows add deeper decision support as your deal flow and portfolio become more demanding."
+        />
+        <div className="premium-preview-grid">
+          <PremiumPreview label="Pro" title="AI Investor Verdicts" copy="Turn metrics into concise strengths, risks and recommended next steps." />
+          <PremiumPreview label="Pro" title="Advanced Sensitivity Analysis" copy="Stress-test valuation, rent, interest rates and occupancy before offer stage." />
+          <PremiumPreview label="Pro" title="Strategy Comparison" copy="Compare BRRR, Airbnb and BTL using return, cashflow, capital and risk." />
+          <PremiumPreview label="Pro" title="PDF Reports" copy="Create decision records for your own file, partners, lenders or brokers." />
+          <PremiumPreview label="Premium" title="Acquisition Pipeline" copy="Manage opportunities from lead to purchased without losing context." />
+          <PremiumPreview label="Premium" title="Portfolio Tracking" copy="Track rent, equity and growth once deals become owned assets." />
         </div>
       </section>
 
@@ -1435,14 +1554,19 @@ function BrrrAnalyzerPage() {
     const effectiveMonthlyRent = Math.max(monthlyRent - voidLoss, 0);
 
     const totalCashInvested = purchasePrice + refurbCost + stampDuty + legalFees;
+    const totalProjectCost = purchasePrice + refurbCost + stampDuty + legalFees;
     const refinanceLoan = refinanceValue * (loanToValue / 100);
     const monthlyMortgage = (refinanceLoan * (interestRate / 100)) / 12;
     const monthlyCashflow = effectiveMonthlyRent - monthlyRunningCosts - monthlyMortgage;
     const annualCashflow = monthlyCashflow * 12;
     const grossYield = purchasePrice > 0 ? ((monthlyRent * 12) / purchasePrice) * 100 : 0;
-    const netYield = totalCashInvested > 0 ? (annualCashflow / totalCashInvested) * 100 : 0;
+    const annualNetRentBeforeFinance = (effectiveMonthlyRent - monthlyRunningCosts) * 12;
+    const netYield = purchasePrice > 0 ? (annualNetRentBeforeFinance / purchasePrice) * 100 : 0;
     const cashLeftInDeal = Math.max(totalCashInvested - refinanceLoan, 0);
-    const cashOnCashRoi = totalCashInvested > 0 ? (annualCashflow / totalCashInvested) * 100 : 0;
+    const returnOnTotalCapitalInvested = totalCashInvested > 0 ? (annualCashflow / totalCashInvested) * 100 : 0;
+    const brrrCashOnCashReturn = cashLeftInDeal > 0 ? (annualCashflow / cashLeftInDeal) * 100 : null;
+    const equityCreated = refinanceValue - totalProjectCost;
+    const refinanceStrength = totalCashInvested > 0 ? (refinanceLoan / totalCashInvested) * 100 : 0;
     const breakEvenRent = (1 - voidAllowance / 100) > 0 ? (monthlyMortgage + monthlyRunningCosts) / (1 - voidAllowance / 100) : 0;
     const breakEvenRefinanceValue = loanToValue > 0 ? totalCashInvested / (loanToValue / 100) : 0;
     const breakEvenInterestRate = refinanceLoan > 0 ? ((effectiveMonthlyRent - monthlyRunningCosts) * 12 / refinanceLoan) * 100 : 0;
@@ -1467,14 +1591,20 @@ function BrrrAnalyzerPage() {
       stampDuty,
       calculatedStampDuty,
       totalCashInvested,
+      totalProjectCost,
       refinanceLoan,
       monthlyMortgage,
       monthlyCashflow,
       annualCashflow,
+      annualNetRentBeforeFinance,
       grossYield,
       netYield,
       cashLeftInDeal,
-      cashOnCashRoi,
+      cashOnCashRoi: returnOnTotalCapitalInvested,
+      returnOnTotalCapitalInvested,
+      brrrCashOnCashReturn,
+      equityCreated,
+      refinanceStrength,
       monthlyRunningCosts,
       voidLoss,
       effectiveMonthlyRent,
@@ -1486,10 +1616,12 @@ function BrrrAnalyzerPage() {
       gdvSensitivity,
     };
 
+    const rating = getDealRating(calculatedMetrics);
+
     return {
       ...calculatedMetrics,
-      rating: getDealRating(calculatedMetrics),
-      verdict: getDealVerdict(calculatedMetrics),
+      rating,
+      verdict: getDealVerdict({ ...calculatedMetrics, rating }),
       healthSummary: getBrrrHealthSummary(calculatedMetrics),
     };
   }, [inputs, scenario]);
@@ -1538,7 +1670,7 @@ function BrrrAnalyzerPage() {
         id: crypto.randomUUID(),
         type: 'Deal',
         title: deal.name,
-        copy: deal.notes || `${formatMoney(metrics.monthlyCashflow)} monthly cashflow · ${formatPercent(metrics.cashOnCashRoi)} cash-on-cash ROI`,
+        copy: deal.notes || `${formatMoney(metrics.monthlyCashflow)} monthly cashflow · ${formatPercent(metrics.returnOnTotalCapitalInvested)} return on total capital`,
         createdAt: deal.createdAt,
         route: '/brrr',
         scenario,
@@ -1650,7 +1782,7 @@ function BrrrAnalyzerPage() {
         <div>
           <p className="eyebrow">Active module</p>
           <h1>BRRR Analyzer</h1>
-          <p>Underwrite purchase, refurb, refinance position, cashflow, yield and cash-on-cash return.</p>
+          <p>Underwrite purchase, refurb, refinance position, cashflow, yield, total capital return and BRRR cash-on-cash return.</p>
         </div>
         <div className="module-header-actions">
           {saveMessage && <span>{saveMessage}</span>}
@@ -1665,7 +1797,7 @@ function BrrrAnalyzerPage() {
 
       <section className="summary-strip" aria-label="Deal summary">
         <SummaryCard label="Monthly Cashflow" value={formatMoney(metrics.monthlyCashflow)} copy="After mortgage, running costs and void allowance." />
-        <SummaryCard label="Cash-on-Cash ROI" value={formatPercent(metrics.cashOnCashRoi)} copy="Annual cashflow compared with total cash invested." />
+        <SummaryCard label="Return on Total Capital Invested" value={formatPercent(metrics.returnOnTotalCapitalInvested)} copy="Annual cashflow compared with total capital invested." />
         <SummaryCard label="Cash Left in Deal" value={formatMoney(metrics.cashLeftInDeal)} copy="Total cash invested less estimated refinance proceeds." />
       </section>
 
@@ -1691,13 +1823,16 @@ function BrrrAnalyzerPage() {
               <div className="metric-list compact">
                 <Result label="Total Cash Invested" value={formatMoney(metrics.totalCashInvested)} />
                 <Result label="Refinance Loan Estimate" value={formatMoney(metrics.refinanceLoan)} />
-                <Result label="Cash Left in Deal" value={formatMoney(metrics.cashLeftInDeal)} highlight />
+                <Result label="Total Capital Left In Deal" value={formatMoney(metrics.cashLeftInDeal)} note="Capital still tied up after estimated refinance proceeds." highlight />
                 <Result label="Monthly Mortgage Payment" value={formatMoney(metrics.monthlyMortgage)} />
                 <Result label="Monthly Cashflow" value={formatMoney(metrics.monthlyCashflow)} highlight />
                 <Result label="Annual Cashflow" value={formatMoney(metrics.annualCashflow)} />
-                <Result label="Gross Yield" value={formatPercent(metrics.grossYield)} note="Property performance based on gross rent and purchase price." />
-                <Result label="Net Yield" value={formatPercent(metrics.netYield)} note="Annual cashflow relative to total cash invested." />
-                <Result label="Cash-on-Cash ROI" value={formatPercent(metrics.cashOnCashRoi)} note="Annual cashflow compared with total cash invested." highlight />
+                <Result label="Gross Yield" value={formatPercent(metrics.grossYield)} note="Annual gross rent divided by purchase price." />
+                <Result label="Net Yield" value={formatPercent(metrics.netYield)} note="Effective annual rent after voids and running costs, divided by purchase price. Mortgage is excluded." />
+                <Result label="Return on Total Capital Invested" value={formatPercent(metrics.returnOnTotalCapitalInvested)} note="Annual cashflow divided by purchase, refurb, stamp duty and buying costs." highlight />
+                <Result label="BRRR Cash-on-Cash Return" value={metrics.brrrCashOnCashReturn === null ? 'Capital Fully Recycled' : formatPercent(metrics.brrrCashOnCashReturn)} note="Annual cashflow divided by cash left in the deal after refinance." />
+                <Result label="Equity Created" value={formatMoney(metrics.equityCreated)} note="Post-refurb value less total project cost." />
+                <Result label="Refinance Strength" value={formatPercent(metrics.refinanceStrength)} note="Estimated refinance loan compared with total capital invested." />
               </div>
             </div>
           )}
@@ -1775,7 +1910,8 @@ function AirbnbAnalyzerPage() {
   const [inputs, setInputs] = useState(initialAirbnbInputs);
   const [scenario, setScenario] = useState('expected');
   const [activeTab, setActiveTab] = useState('overview');
-  const [dealName, setDealName] = useState(createDefaultDealName({ purchasePrice: initialAirbnbInputs.propertyValue }, 'Airbnb'));
+  const [compareAgainstBtl, setCompareAgainstBtl] = useState(true);
+  const [dealName, setDealName] = useState(createDefaultDealName({ purchasePrice: initialAirbnbInputs.purchasePrice }, 'Airbnb'));
   const [dealNote, setDealNote] = useState('');
   const [vaultItems, setVaultItems] = useState(loadDealVault);
   const [noteDraft, setNoteDraft] = useState('');
@@ -1788,7 +1924,9 @@ function AirbnbAnalyzerPage() {
 
   const metrics = useMemo(() => {
     const baseValues = {
-      propertyValue: toNumber(inputs.propertyValue),
+      purchasePrice: toNumber(inputs.purchasePrice),
+      currentMarketValue: toNumber(inputs.currentMarketValue || inputs.propertyValue),
+      propertyValue: toNumber(inputs.currentMarketValue || inputs.propertyValue || inputs.purchasePrice),
       longTermRent: toNumber(inputs.longTermRent),
       nightlyRate: toNumber(inputs.nightlyRate),
       occupancy: toNumber(inputs.occupancy),
@@ -1804,6 +1942,8 @@ function AirbnbAnalyzerPage() {
     const adjustedValues = applyAirbnbScenario(baseValues, scenario);
     const {
       propertyValue,
+      purchasePrice,
+      currentMarketValue,
       longTermRent,
       nightlyRate,
       occupancy,
@@ -1826,14 +1966,13 @@ function AirbnbAnalyzerPage() {
     const operatingCosts = platformCost + managementCost + monthlyMortgage + utilities + cleaningCosts;
     const monthlyProfit = grossMonthlyRevenue - operatingCosts;
     const annualProfit = monthlyProfit * 12;
-    const airbnbYield = propertyValue > 0 ? (annualProfit / propertyValue) * 100 : 0;
+    const marketValue = currentMarketValue || propertyValue || purchasePrice;
+    const airbnbYield = marketValue > 0 ? (annualProfit / marketValue) * 100 : 0;
     const paybackMonths = monthlyProfit > 0 ? setupCost / monthlyProfit : 0;
     const btlProfit = longTermRent - monthlyMortgage;
     const monthlyDifference = monthlyProfit - btlProfit;
-    const comparison =
-      monthlyDifference >= 0
-        ? `Airbnb may outperform BTL by ${formatMoney(monthlyDifference)}/month.`
-        : `BTL may be safer based on these assumptions by ${formatMoney(Math.abs(monthlyDifference))}/month.`;
+    const instantEquity = Math.max(marketValue - purchasePrice, 0);
+    const discountToMarketValue = marketValue > 0 ? ((marketValue - purchasePrice) / marketValue) * 100 : 0;
     const variableCostRate = (platformFee + managementFee) / 100;
     const fixedCosts = monthlyMortgage + utilities + cleaningCosts;
     const revenuePerOccupancyPoint = (nightlyRate * 30 + cleaningFee * staysPerMonth) / 100;
@@ -1852,6 +1991,10 @@ function AirbnbAnalyzerPage() {
 
     return {
       scenario,
+      compareAgainstBtl,
+      purchasePrice,
+      currentMarketValue: marketValue,
+      occupancy,
       grossMonthlyRevenue,
       operatingCosts,
       monthlyProfit,
@@ -1860,7 +2003,8 @@ function AirbnbAnalyzerPage() {
       paybackMonths,
       btlProfit,
       monthlyDifference,
-      comparison,
+      instantEquity,
+      discountToMarketValue,
       breakEvenOccupancy,
       breakEvenNightlyRate,
       breakEvenMonthlyRevenue,
@@ -1871,10 +2015,11 @@ function AirbnbAnalyzerPage() {
         breakEvenOccupancy,
       }),
     };
-  }, [inputs, scenario]);
+  }, [inputs, scenario, compareAgainstBtl]);
 
   const health = getAirbnbHealth(metrics);
   const insights = getAirbnbInsights(metrics);
+  const airbnbRecommendation = getAirbnbRecommendation(metrics);
   const signatureVerdict = getSignatureVerdict('Airbnb', metrics, health);
   const strategyComparison = getAirbnbStrategyComparison(metrics);
 
@@ -1902,7 +2047,7 @@ function AirbnbAnalyzerPage() {
   }
 
   function saveCurrentDeal() {
-    const cleanName = dealName.trim() || createDefaultDealName({ purchasePrice: inputs.propertyValue }, 'Airbnb');
+    const cleanName = dealName.trim() || createDefaultDealName({ purchasePrice: inputs.purchasePrice }, 'Airbnb');
     saveVault([
       {
         id: crypto.randomUUID(),
@@ -1926,7 +2071,7 @@ function AirbnbAnalyzerPage() {
   function saveScenario() {
     addVaultItem(
       'Scenario',
-      `${dealName.trim() || createDefaultDealName({ purchasePrice: inputs.propertyValue }, 'Airbnb')} · ${scenario[0].toUpperCase()}${scenario.slice(1)}`,
+      `${dealName.trim() || createDefaultDealName({ purchasePrice: inputs.purchasePrice }, 'Airbnb')} · ${scenario[0].toUpperCase()}${scenario.slice(1)}`,
       `${formatMoney(metrics.monthlyProfit)} monthly profit · ${formatPercent(metrics.airbnbYield)} Airbnb yield`,
     );
   }
@@ -1966,13 +2111,17 @@ function AirbnbAnalyzerPage() {
       <section className="summary-strip" aria-label="Airbnb summary">
         <SummaryCard label="Monthly Profit" value={formatMoney(metrics.monthlyProfit)} copy="After platform, management, bills, cleaning and finance costs." />
         <SummaryCard label="Airbnb Yield" value={formatPercent(metrics.airbnbYield)} copy="Annual profit compared with property value." />
-        <SummaryCard label="BTL Comparison" value={formatMoney(metrics.monthlyDifference)} copy="Difference versus long-term rental profit." />
+        <SummaryCard label="Monthly Difference vs BTL" value={compareAgainstBtl ? formatMoney(metrics.monthlyDifference) : 'Off'} copy="Difference versus long-term rental profit when comparison is enabled." />
       </section>
 
       <section className="analyzer-grid">
         <div className="panel input-panel">
           <PanelHeading label="Inputs" title="Serviced Accommodation Assumptions" meta="Early access" />
           <DealIdentityForm dealName={dealName} setDealName={setDealName} dealNote={dealNote} setDealNote={setDealNote} />
+          <div className="comparison-toggle">
+            <button className={compareAgainstBtl ? 'scenario-button active' : 'scenario-button'} type="button" onClick={() => setCompareAgainstBtl(true)}>Compare Against BTL</button>
+            <button className={!compareAgainstBtl ? 'scenario-button active' : 'scenario-button'} type="button" onClick={() => setCompareAgainstBtl(false)}>No Comparison</button>
+          </div>
           <ScenarioToggle scenario={scenario} setScenario={setScenario} />
           <InputSections groupedFields={groupFields(airbnbFields)} inputs={inputs} updateInput={updateInput} />
         </div>
@@ -1983,20 +2132,24 @@ function AirbnbAnalyzerPage() {
 
           {activeTab === 'overview' && (
             <div className="tab-panel">
-              <div className={metrics.monthlyDifference >= 0 ? 'rating-card strong' : 'rating-card borderline'}>
+              <div className={`rating-card ${airbnbRecommendation.tone}`}>
                 <span>Strategy comparison</span>
-                <strong>{metrics.monthlyDifference >= 0 ? 'Airbnb leads' : 'BTL may be safer'}</strong>
-                <p>{metrics.comparison} Results depend heavily on occupancy, nightly rate and operating costs.</p>
+                <strong>{airbnbRecommendation.label}</strong>
+                <p>{airbnbRecommendation.reasoning} Confidence: {airbnbRecommendation.confidence}. Results depend heavily on occupancy, nightly rate and operating costs.</p>
               </div>
               <div className="metric-list compact">
+                <Result label="Purchase Price" value={formatMoney(metrics.purchasePrice)} />
+                <Result label="Current Market Value" value={formatMoney(metrics.currentMarketValue)} />
+                <Result label="Instant Equity" value={formatMoney(metrics.instantEquity)} note="Current market value less purchase price." />
+                <Result label="Discount to Market Value" value={formatPercent(metrics.discountToMarketValue)} note="Discount created by buying below estimated market value." />
                 <Result label="Estimated Gross Monthly Airbnb Revenue" value={formatMoney(metrics.grossMonthlyRevenue)} highlight />
                 <Result label="Estimated Operating Costs" value={formatMoney(metrics.operatingCosts)} />
                 <Result label="Estimated Monthly Profit" value={formatMoney(metrics.monthlyProfit)} highlight />
                 <Result label="Estimated Annual Profit" value={formatMoney(metrics.annualProfit)} />
                 <Result label="Airbnb Yield" value={formatPercent(metrics.airbnbYield)} />
                 <Result label="Payback Period on Setup Cost" value={formatMonths(metrics.paybackMonths)} />
-                <Result label="Long-Term Rental Profit" value={formatMoney(metrics.btlProfit)} />
-                <Result label="Difference in Monthly Profit" value={formatMoney(metrics.monthlyDifference)} />
+                {compareAgainstBtl && <Result label="Long-Term Rental Profit" value={formatMoney(metrics.btlProfit)} />}
+                {compareAgainstBtl && <Result label="Expected Monthly Difference" value={formatMoney(metrics.monthlyDifference)} highlight />}
               </div>
             </div>
           )}
@@ -2007,10 +2160,12 @@ function AirbnbAnalyzerPage() {
               <DecisionPanel
                 health={health}
                 healthSummary={metrics.healthSummary}
-                verdict={metrics.comparison}
+                verdict={airbnbRecommendation.reasoning}
                 benchmarks={[
                   'Short-term rental performance depends heavily on local demand, regulation and operational standards.',
-                  metrics.monthlyDifference >= 0
+                  !compareAgainstBtl
+                    ? 'BTL comparison is switched off, so the verdict focuses on standalone Airbnb operating risk.'
+                    : metrics.monthlyDifference >= 0
                     ? 'The Airbnb scenario outperforms the BTL baseline on profit, before considering extra workload and volatility.'
                     : 'The BTL baseline currently offers a stronger or safer monthly position.',
                 ]}
@@ -2071,7 +2226,7 @@ function ProfessionalToolsPage() {
     { title: 'Scenario Testing', tier: 'Included', copy: 'Compare conservative, expected and optimistic views of a deal.' },
     { title: 'Unlimited Saved Deals', tier: 'Pro Preview', copy: 'Build a larger underwriting pipeline without local saved-deal limits.' },
     { title: 'PDF Investment Reports', tier: 'Pro Preview', copy: 'Export clean investor reports for lenders, partners or internal review.' },
-    { title: 'Advanced Deal Comparison', tier: 'Pro Preview', copy: 'Compare Deal A and Deal B across cashflow, yield, ROI, risk and capital left in.' },
+    { title: 'Advanced Deal Comparison', tier: 'Pro Preview', copy: 'Compare Deal A and Deal B across cashflow, yield, return, risk and capital left in.' },
   ];
 
   return (
@@ -2441,10 +2596,12 @@ function CalculationsPage() {
       </section>
 
       <section className="legal-grid">
-        <InfoCard title="Cash-on-cash ROI" copy="Annual cashflow divided by total cash invested, multiplied by 100. This avoids inflated refinance-based ROI." />
+        <InfoCard title="Return on total capital invested" copy="Annual cashflow divided by total capital invested, multiplied by 100. This avoids inflated refinance-based ROI." />
+        <InfoCard title="BRRR cash-on-cash return" copy="Annual cashflow divided by the cash left in the deal after refinance. If all capital is recovered, AcquiraIQ displays Capital Fully Recycled." />
         <InfoCard title="Gross yield" copy="Annual gross rent divided by purchase price. This is a property performance screen, not investor return." />
-        <InfoCard title="Net yield" copy="Annual cashflow divided by total cash invested after finance, running costs and void allowance." />
+        <InfoCard title="Net yield" copy="Effective annual rent after voids and running costs, divided by purchase price. Mortgage is excluded so yield remains a property performance metric." />
         <InfoCard title="Cash left in deal" copy="Total cash invested less the estimated refinance loan. This shows capital still tied up after refinance." />
+        <InfoCard title="Equity created" copy="Post-refurb value less total project cost. This is an estimate and should be supported by sold comparables." />
         <InfoCard title="Airbnb profit" copy="Gross monthly revenue minus platform fees, management fees, finance, utilities and cleaning costs." />
         <InfoCard title="Sensitivity analysis" copy="Stress tests show how results change when rent, rates, GDV or occupancy move away from the expected case." />
       </section>
@@ -2642,13 +2799,15 @@ function PortfolioPage() {
   const forecastValue = totals.value * ((1 + toNumber(forecast.valueGrowth) / 100) ** forecastYears);
   const forecastRent = totals.rent * ((1 + toNumber(forecast.rentGrowth) / 100) ** forecastYears);
   const forecastEquity = Math.max(forecastValue - properties.reduce((sum, property) => sum + toNumber(property.mortgageBalance), 0), 0);
+  const valueGrowthGained = Math.max(forecastValue - totals.value, 0);
+  const rentGrowthGained = Math.max(forecastRent - totals.rent, 0);
 
   return (
     <main className="page portfolio-page">
       <section className="page-hero compact">
         <p className="eyebrow">Portfolio</p>
         <h1>Portfolio Tracker</h1>
-        <p>Track live or purchased properties with value, rent, debt and equity in one local workspace.</p>
+        <p>The final stage of the investor workflow: track purchased properties with value, rent, mortgage balance and estimated equity in one local workspace.</p>
       </section>
 
       <section className="summary-strip">
@@ -2664,7 +2823,7 @@ function PortfolioPage() {
           <label className="note-entry"><span>Purchase price</span><input type="number" value={form.purchasePrice} onChange={(event) => updateForm('purchasePrice', event.target.value)} /></label>
           <label className="note-entry"><span>Current value</span><input type="number" value={form.currentValue} onChange={(event) => updateForm('currentValue', event.target.value)} /></label>
           <label className="note-entry"><span>Monthly rent</span><input type="number" value={form.monthlyRent} onChange={(event) => updateForm('monthlyRent', event.target.value)} /></label>
-          <label className="note-entry"><span>Mortgage balance</span><input type="number" value={form.mortgageBalance} onChange={(event) => updateForm('mortgageBalance', event.target.value)} /></label>
+          <label className="note-entry"><span>Mortgage balance</span><input type="number" value={form.mortgageBalance} onChange={(event) => updateForm('mortgageBalance', event.target.value)} /><em>Outstanding loan secured against the property, used to estimate equity.</em></label>
           <button className="primary-btn" type="button" onClick={addProperty}>Add Property</button>
         </div>
 
@@ -2681,9 +2840,16 @@ function PortfolioPage() {
                 <article className="vault-record" key={property.id}>
                   <span>Property</span>
                   <strong>{property.name}</strong>
-                  <p>{formatMoney(property.currentValue)} value · {formatMoney(property.monthlyRent)} monthly rent · {formatMoney(Math.max(property.currentValue - property.mortgageBalance, 0))} equity</p>
+                  <div className="record-metrics">
+                    <span><small>Current Value</small>{formatMoney(property.currentValue)}</span>
+                    <span><small>Monthly Rent</small>{formatMoney(property.monthlyRent)}</span>
+                    <span><small>Equity</small>{formatMoney(Math.max(property.currentValue - property.mortgageBalance, 0))}</span>
+                    <span><small>Purchase Price</small>{formatMoney(property.purchasePrice)}</span>
+                    <span><small>Equity Created</small>{formatMoney(Math.max(property.currentValue - property.purchasePrice, 0))}</span>
+                    <span><small>Discount to Market</small>{property.currentValue > 0 ? formatPercent(((property.currentValue - property.purchasePrice) / property.currentValue) * 100) : 'N/A'}</span>
+                  </div>
                   <div className="vault-record-footer">
-                    <small>{formatMoney(property.purchasePrice)} purchase price</small>
+                    <small>{formatShortDate(new Date(property.createdAt))}</small>
                     <button className="inline-danger" type="button" onClick={() => deleteProperty(property.id)}>Delete</button>
                   </div>
                 </article>
@@ -2704,6 +2870,8 @@ function PortfolioPage() {
           <SummaryCard label="Forecast Value" value={formatMoney(forecastValue)} copy={`${forecastYears} year estimate based on value growth.`} />
           <SummaryCard label="Forecast Monthly Rent" value={formatMoney(forecastRent)} copy="Projected gross monthly rent." />
           <SummaryCard label="Forecast Equity" value={formatMoney(forecastEquity)} copy="Forecast value less current mortgage balance." />
+          <SummaryCard label="Value Growth Gained" value={formatMoney(valueGrowthGained)} copy="Forecast value increase above current portfolio value." />
+          <SummaryCard label="Rent Growth Gained" value={formatMoney(rentGrowthGained)} copy="Forecast monthly rent increase above current rent." />
         </div>
       </section>
     </main>
@@ -2736,9 +2904,17 @@ function InvestorContactsPage() {
   return (
     <main className="page contacts-page">
       <section className="page-hero compact">
-        <p className="eyebrow">Investor CRM</p>
+        <p className="eyebrow">Investor CRM · Premium Preview</p>
         <h1>Investor Contacts</h1>
-        <p>Keep brokers, agents, sourcers, lenders and partners close to the deal workflow.</p>
+        <p>Keep estate agents, sourcers, mortgage brokers, solicitors, builders and joint venture partners close to the acquisition workflow.</p>
+      </section>
+
+      <section className="trust-section glass-card">
+        <SectionHeading
+          label="Investor network"
+          title="Relationships support acquisitions and portfolio growth"
+          copy="This lightweight CRM is a Premium Preview. It helps you keep deal sources, finance contacts and delivery partners connected to the opportunities you are analysing."
+        />
       </section>
 
       <section className="workspace-layout">
@@ -2757,16 +2933,19 @@ function InvestorContactsPage() {
           {contacts.length === 0 ? (
             <div className="empty-state">
               <strong>No contacts yet</strong>
-              <p>Add a broker, agent, sourcer or lender to start building your investor network.</p>
+              <p>Add estate agents, sourcers, mortgage brokers, solicitors, builders or joint venture partners to start building an acquisition network.</p>
             </div>
           ) : (
             <div className="vault-list">
               {contacts.map((contact) => (
                 <article className="vault-record" key={contact.id}>
-                  <span>{contact.role}</span>
+                  <span className="role-badge">{contact.role}</span>
                   <strong>{contact.name}</strong>
-                  <p>{contact.email || 'No email'} · {contact.phone || 'No phone'}</p>
-                  {contact.notes && <p>{contact.notes}</p>}
+                  <div className="record-metrics">
+                    <span><small>Email</small>{contact.email || 'No email'}</span>
+                    <span><small>Phone</small>{contact.phone || 'No phone'}</span>
+                  </div>
+                  {contact.notes && <p className="saved-note">{contact.notes}</p>}
                   <div className="vault-record-footer">
                     <small>{formatShortDate(new Date(contact.createdAt))}</small>
                     <button className="inline-danger" type="button" onClick={() => deleteContact(contact.id)}>Delete</button>
@@ -2783,8 +2962,19 @@ function InvestorContactsPage() {
 
 function PipelinePage() {
   const stages = ['Lead', 'Analysing', 'Offered', 'Under Offer', 'Purchased'];
+  const stageDescriptions = {
+    Lead: 'New opportunities identified.',
+    Analysing: 'Deals being reviewed.',
+    Offered: 'Offers submitted.',
+    'Under Offer': 'Deals progressing through due diligence.',
+    Purchased: 'Completed acquisitions ready for Portfolio.',
+  };
   const [pipelineDeals, setPipelineDeals] = useState(loadPipelineDeals);
-  const [title, setTitle] = useState('');
+  const [form, setForm] = useState({ title: '', askingPrice: '', source: '', notes: '' });
+
+  function updateForm(name, value) {
+    setForm((current) => ({ ...current, [name]: value }));
+  }
 
   function savePipeline(nextDeals) {
     setPipelineDeals(nextDeals);
@@ -2792,10 +2982,24 @@ function PipelinePage() {
   }
 
   function addPipelineDeal() {
-    const cleanTitle = title.trim();
+    const cleanTitle = form.title.trim();
     if (!cleanTitle) return;
-    savePipeline([{ id: crypto.randomUUID(), title: cleanTitle, stage: 'Lead', strategy: 'Manual', updatedAt: new Date().toISOString() }, ...pipelineDeals]);
-    setTitle('');
+    const now = new Date().toISOString();
+    savePipeline([
+      {
+        id: crypto.randomUUID(),
+        title: cleanTitle,
+        askingPrice: toNumber(form.askingPrice),
+        source: form.source.trim(),
+        notes: form.notes.trim(),
+        stage: 'Lead',
+        strategy: 'Manual',
+        dateAdded: now,
+        updatedAt: now,
+      },
+      ...pipelineDeals,
+    ]);
+    setForm({ title: '', askingPrice: '', source: '', notes: '' });
   }
 
   function updateStage(dealId, stage) {
@@ -2811,10 +3015,20 @@ function PipelinePage() {
       id: deal.sourceDealId || deal.id,
       name: deal.title,
       metrics: { refinanceLoan: 0 },
-      inputs: {},
+      inputs: { purchasePrice: deal.askingPrice },
     });
     updateStage(deal.id, 'Purchased');
   }
+
+  const pipelineSummary = pipelineDeals.reduce(
+    (summary, deal) => ({
+      active: summary.active + (deal.stage !== 'Purchased' ? 1 : 0),
+      offered: summary.offered + (deal.stage === 'Offered' ? 1 : 0),
+      underOffer: summary.underOffer + (deal.stage === 'Under Offer' ? 1 : 0),
+      value: summary.value + toNumber(deal.askingPrice),
+    }),
+    { active: 0, offered: 0, underOffer: 0, value: 0 },
+  );
 
   return (
     <main className="page pipeline-page">
@@ -2824,14 +3038,24 @@ function PipelinePage() {
         <p>Track opportunities through the investor workflow: Analyse Deal, Save Opportunity, Move To Pipeline, Add To Portfolio.</p>
       </section>
 
+      <section className="summary-strip">
+        <SummaryCard label="Active Opportunities" value={String(pipelineSummary.active)} copy="Deals not yet marked as purchased." />
+        <SummaryCard label="Offers Submitted" value={String(pipelineSummary.offered)} copy="Deals currently at offer submitted stage." />
+        <SummaryCard label="Under Offer Deals" value={String(pipelineSummary.underOffer)} copy="Deals progressing through due diligence." />
+        <SummaryCard label="Pipeline Value" value={formatMoney(pipelineSummary.value)} copy="Total asking price across pipeline records." />
+      </section>
+
       <section className="upgrade-strip glass-card">
         <div>
           <p className="eyebrow">Add lead</p>
           <h2>Capture an opportunity quickly</h2>
-          <p>Saved analyzer deals can also be moved here from the BRRR module or Deal Vault.</p>
+          <p>Add sourced opportunities here, or move saved analyzer deals from BRRR, Airbnb or Deal Vault.</p>
         </div>
-        <div className="hero-actions">
-          <input className="pipeline-input" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Liverpool Airbnb Opportunity" />
+        <div className="pipeline-form">
+          <label className="note-entry"><span>Property Name / Address</span><input className="pipeline-input" value={form.title} onChange={(event) => updateForm('title', event.target.value)} placeholder="Liverpool Airbnb Opportunity" /></label>
+          <label className="note-entry"><span>Asking price</span><input className="pipeline-input" type="number" value={form.askingPrice} onChange={(event) => updateForm('askingPrice', event.target.value)} placeholder="200000" /></label>
+          <label className="note-entry"><span>Source</span><input className="pipeline-input" value={form.source} onChange={(event) => updateForm('source', event.target.value)} placeholder="Agent, sourcer, auction, Rightmove" /></label>
+          <label className="note-entry"><span>Notes</span><textarea value={form.notes} onChange={(event) => updateForm('notes', event.target.value)} rows="3" placeholder="Initial view, risks, follow-up actions." /></label>
           <button className="primary-btn" type="button" onClick={addPipelineDeal}>Add Lead</button>
         </div>
       </section>
@@ -2840,6 +3064,7 @@ function PipelinePage() {
         {stages.map((stage) => (
           <div className="pipeline-column panel" key={stage}>
             <PanelHeading label="Stage" title={stage} meta={`${pipelineDeals.filter((deal) => deal.stage === stage).length}`} />
+            <p className="stage-description">{stageDescriptions[stage]}</p>
             <div className="vault-list">
               {pipelineDeals.filter((deal) => deal.stage === stage).length === 0 ? (
                 <div className="empty-state compact-empty">
@@ -2851,13 +3076,19 @@ function PipelinePage() {
                   <span>{deal.strategy || 'Deal'}</span>
                   <strong>{deal.title}</strong>
                   <p>{deal.monthlyProfit === null || deal.monthlyProfit === undefined ? 'No profit model attached yet.' : `${formatMoney(deal.monthlyProfit)} monthly profit`}</p>
+                  <div className="record-metrics">
+                    <span><small>Asking price</small>{deal.askingPrice ? formatMoney(toNumber(deal.askingPrice)) : 'Not set'}</span>
+                    <span><small>Source</small>{deal.source || 'Not set'}</span>
+                    <span><small>Date added</small>{formatShortDate(new Date(deal.dateAdded || deal.updatedAt))}</span>
+                  </div>
+                  {deal.notes && <p className="saved-note">{deal.notes}</p>}
                   <select className="stage-select" value={deal.stage} onChange={(event) => updateStage(deal.id, event.target.value)}>
                     {stages.map((option) => <option value={option} key={option}>{option}</option>)}
                   </select>
                   <div className="vault-record-footer">
                     <button className="inline-danger" type="button" onClick={() => deletePipelineDeal(deal.id)}>Delete</button>
                     {deal.stage === 'Purchased' ? (
-                      <button className="inline-action" type="button" onClick={() => movePipelineDealToPortfolio(deal)}>Add to portfolio</button>
+                      <button className="inline-action" type="button" onClick={() => movePipelineDealToPortfolio(deal)}>Move To Portfolio</button>
                     ) : (
                       <small>{formatShortDate(new Date(deal.updatedAt))}</small>
                     )}
@@ -3038,7 +3269,7 @@ function StrategyComparisonPanel({ comparison }) {
             <strong>{row.strategy}</strong>
             <span>Monthly Profit: {row.monthlyProfit === null ? 'Model separately' : formatMoney(row.monthlyProfit)}</span>
             <span>Yield: {row.yield === null ? 'N/A' : formatPercent(row.yield)}</span>
-            <span>ROI: {row.roi === null ? 'N/A' : formatPercent(row.roi)}</span>
+            <span>Return: {row.roi === null ? 'N/A' : formatPercent(row.roi)}</span>
             <span>Risk: {row.risk}</span>
             <span>Capital Left: {row.capitalLeft === null ? 'N/A' : formatMoney(row.capitalLeft)}</span>
           </div>
@@ -3178,7 +3409,7 @@ function StrategyComparisonPreview() {
       <SectionHeading
         label="Strategy comparison"
         title="Which strategy wins?"
-        copy="A flagship decision layer for comparing BRRR, Airbnb and BTL using profit, yield, ROI, capital position and risk."
+        copy="A flagship decision layer for comparing BRRR, Airbnb and BTL using profit, yield, return, capital position and risk."
       />
       <div className="recommendation-card platform-recommendation">
         <span>Recommended Strategy</span>
@@ -3186,7 +3417,7 @@ function StrategyComparisonPreview() {
         <p>As users complete each module, AcquiraIQ can recommend the strategy with the strongest risk-adjusted profile.</p>
       </div>
       <div className="strategy-table">
-        <div><strong>Strategy</strong><strong>Monthly Profit</strong><strong>Yield</strong><strong>ROI</strong><strong>Capital Left In</strong><strong>Risk Level</strong></div>
+        <div><strong>Strategy</strong><strong>Monthly Profit</strong><strong>Yield</strong><strong>Return</strong><strong>Capital Left In</strong><strong>Risk Level</strong></div>
         <div><span>BRRR</span><span>From analyzer</span><span>Live</span><span>Live</span><span>Live</span><span>Moderate</span></div>
         <div><span>Airbnb</span><span>From analyzer</span><span>Live</span><span>Estimate</span><span>N/A</span><span>Higher ops</span></div>
         <div><span>BTL</span><span>Baseline</span><span>Estimate</span><span>Estimate</span><span>N/A</span><span>Lower ops</span></div>
@@ -3340,8 +3571,8 @@ function SavedDealCard({ deal, active, savedMetrics, rating, loadDeal, deleteDea
                 {formatMoney(savedMetrics.monthlyCashflow)}
               </span>
               <span>
-                <small>Cash-on-Cash ROI</small>
-                {formatPercent(savedMetrics.cashOnCashRoi)}
+                <small>Total Capital Return</small>
+                {formatPercent(savedMetrics.returnOnTotalCapitalInvested ?? savedMetrics.cashOnCashRoi)}
               </span>
             </div>
 
@@ -3496,7 +3727,7 @@ function RoadmapCard({ title, badge, copy }) {
 }
 
 function DealComparisonPreview() {
-  const rows = ['Cashflow', 'Yield', 'ROI', 'Risk', 'Capital Left In'];
+  const rows = ['Cashflow', 'Yield', 'Return', 'Risk', 'Capital Left In'];
 
   return (
     <section className="comparison-preview glass-card">
@@ -3521,7 +3752,7 @@ function DealComparisonPreview() {
 
 function SummaryCard({ label, value, copy }) {
   return (
-    <div className="summary-card">
+    <div className="summary-card" title={copy}>
       <span>{label}</span>
       <strong>{value}</strong>
       <p>{copy}</p>
@@ -3543,7 +3774,7 @@ function PanelHeading({ label, title, meta }) {
 
 function Result({ label, value, note, highlight = false }) {
   return (
-    <div className={highlight ? 'metric highlight' : 'metric'}>
+    <div className={highlight ? 'metric highlight' : 'metric'} title={note || label}>
       <span>
         {label}
         {note && <em>{note}</em>}

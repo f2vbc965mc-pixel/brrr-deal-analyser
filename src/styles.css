@@ -967,7 +967,7 @@ p {
 }
 
 .summary-strip {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   margin-bottom: 18px;
 }
 
@@ -1215,6 +1215,17 @@ p {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
   margin-bottom: 18px;
+  padding: 6px;
+  border: 1px solid rgba(245, 241, 232, 0.08);
+  border-radius: 8px;
+  background: rgba(245, 241, 232, 0.035);
+}
+
+.comparison-toggle {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
   padding: 6px;
   border: 1px solid rgba(245, 241, 232, 0.08);
   border-radius: 8px;
@@ -1668,7 +1679,14 @@ p {
 
 .note-entry {
   display: grid;
-  gap: 8px;
+  gap: 10px;
+}
+
+.note-entry em {
+  color: #91897f;
+  font-size: 0.78rem;
+  font-style: normal;
+  line-height: 1.45;
 }
 
 .note-entry textarea {
@@ -1696,7 +1714,7 @@ p {
 
 .vault-record {
   display: grid;
-  gap: 4px;
+  gap: 9px;
 }
 
 .vault-record strong {
@@ -1770,6 +1788,59 @@ p {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+}
+
+.pipeline-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
+  gap: 14px;
+  width: min(740px, 100%);
+}
+
+.pipeline-form .note-entry:last-of-type,
+.pipeline-form .primary-btn {
+  grid-column: 1 / -1;
+}
+
+.stage-description {
+  margin: -6px 0 12px;
+  color: #91897f;
+  font-size: 0.8rem;
+}
+
+.record-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.record-metrics span {
+  min-width: 0;
+  padding: 9px 10px;
+  border-radius: 8px;
+  background: rgba(245, 241, 232, 0.045);
+  color: #f5f1e8;
+  font-size: 0.84rem;
+  font-weight: 850;
+  overflow-wrap: anywhere;
+  text-transform: none;
+}
+
+.record-metrics small {
+  display: block;
+  margin-bottom: 4px;
+  color: #8f887f;
+  font-size: 0.68rem;
+  font-weight: 950;
+  text-transform: uppercase;
+}
+
+.role-badge {
+  width: fit-content;
+  padding: 6px 9px;
+  border-radius: 8px;
+  background: rgba(120, 216, 191, 0.1);
+  color: #cfeee5 !important;
 }
 
 .footer-note {
@@ -1900,6 +1971,11 @@ p {
   .account-grid,
   .summary-strip,
   .analyzer-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .pipeline-form,
+  .record-metrics {
     grid-template-columns: 1fr;
   }
 
