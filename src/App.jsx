@@ -328,7 +328,11 @@ function isAdminUser(user) {
 }
 
 function normalizePlan(plan) {
-  return ['Free', 'Premium', 'Pro', 'Admin'].includes(plan) ? plan : 'Free';
+  const normalizedPlan = String(plan || 'free').toLowerCase();
+  if (normalizedPlan === 'premium') return 'Premium';
+  if (normalizedPlan === 'pro') return 'Pro';
+  if (normalizedPlan === 'admin') return 'Admin';
+  return 'Free';
 }
 
 function getEffectivePlan(user, accountProfile) {
@@ -354,6 +358,20 @@ function getLimitPrompt(resource) {
     resource,
     title: `${RESOURCE_LABELS[resource]} limit reached`,
     copy: `Free accounts include ${formatLimit(getPlanLimit('Free', resource))} ${RESOURCE_LABELS[resource].toLowerCase()}. Upgrade to Premium for unlimited workspace capacity and deeper investor tools.`,
+  };
+}
+
+function isMissingAccountProfilesError(error) {
+  const message = `${error?.message || ''} ${error?.details || ''}`.toLowerCase();
+  return message.includes('account_profiles') && (message.includes('schema cache') || message.includes('could not find the table'));
+}
+
+function getFallbackAccountProfile(user) {
+  return {
+    user_id: user?.id || null,
+    email: user?.email || '',
+    plan: isAdminUser(user) ? 'admin' : 'free',
+    localFallback: true,
   };
 }
 
@@ -550,14 +568,17 @@ async function getResourceCount(user, resource) {
 async function ensureAccountProfile(user) {
   if (!hasCloudWorkspace(user)) return null;
 
-  const requestedPlan = isAdminUser(user) ? 'Admin' : 'Free';
+  const requestedPlan = isAdminUser(user) ? 'admin' : 'free';
   const existing = await supabase
     .from('account_profiles')
     .select('*')
     .eq('user_id', user.id)
     .maybeSingle();
 
-  if (existing.error) throw existing.error;
+  if (existing.error) {
+    if (isMissingAccountProfilesError(existing.error)) return getFallbackAccountProfile(user);
+    throw existing.error;
+  }
 
   let data = existing.data;
 
@@ -571,18 +592,24 @@ async function ensureAccountProfile(user) {
       })
       .select('*')
       .single();
-    if (created.error) throw created.error;
+    if (created.error) {
+      if (isMissingAccountProfilesError(created.error)) return getFallbackAccountProfile(user);
+      throw created.error;
+    }
     data = created.data;
   }
 
-  if (isAdminUser(user) && data.plan !== 'Admin') {
+  if (isAdminUser(user) && normalizePlan(data.plan) !== 'Admin') {
     const { data: adminData, error: adminError } = await supabase
       .from('account_profiles')
-      .update({ plan: 'Admin', email: user.email })
+      .update({ plan: 'admin', email: user.email })
       .eq('user_id', user.id)
       .select('*')
       .single();
-    if (adminError) throw adminError;
+    if (adminError) {
+      if (isMissingAccountProfilesError(adminError)) return getFallbackAccountProfile(user);
+      throw adminError;
+    }
     return adminData;
   }
 
