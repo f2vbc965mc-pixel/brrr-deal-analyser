@@ -279,14 +279,183 @@ function saveInvestorContacts(contacts) {
   localStorage.setItem(CONTACTS_STORAGE_KEY, JSON.stringify(contacts));
 }
 
-function addDealToPipeline(deal, stage = 'Lead') {
-  const pipelineDeals = loadPipelineDeals();
+function hasCloudWorkspace(user) {
+  return Boolean(user?.id && supabase);
+}
+
+function getLocalId(item) {
+  return item.localId || item.local_id || item.id || crypto.randomUUID();
+}
+
+function fromSavedDealRow(row) {
+  const type = row.record_type || 'Deal';
+  const strategy = row.strategy || (row.route === '/airbnb' ? 'Serviced Accommodation' : 'BRRR');
+  const isBrrr = strategy === 'BRRR';
+  return {
+    id: row.id,
+    localId: row.local_id,
+    type,
+    name: row.name || row.title || 'Untitled opportunity',
+    title: row.title || row.name || 'Untitled opportunity',
+    copy: row.copy || row.notes || '',
+    strategy,
+    scenario: row.scenario || 'expected',
+    route: row.route || (strategy === 'Serviced Accommodation' ? '/airbnb' : '/brrr'),
+    notes: row.notes || '',
+    inputs: isBrrr ? normalizeInputs(row.inputs || {}) : normalizeAirbnbInputs(row.inputs || {}),
+    metrics: isBrrr ? migrateOldSavedMetrics(row.metrics || {}) : row.metrics || {},
+    dealId: row.local_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    cloud: true,
+  };
+}
+
+function toSavedDealRow(userId, item) {
+  const title = item.title || item.name || 'Untitled opportunity';
+  const name = item.name || title;
+  return {
+    user_id: userId,
+    local_id: getLocalId(item),
+    record_type: item.type || 'Deal',
+    name,
+    title,
+    copy: item.copy || item.notes || '',
+    strategy: item.strategy || 'BRRR',
+    scenario: item.scenario || 'expected',
+    route: item.route || (item.strategy === 'Serviced Accommodation' ? '/airbnb' : '/brrr'),
+    notes: item.notes || '',
+    inputs: item.inputs || {},
+    metrics: item.metrics || {},
+  };
+}
+
+function fromPipelineRow(row) {
+  return {
+    id: row.id,
+    localId: row.local_id,
+    sourceDealId: row.source_deal_id,
+    title: row.title,
+    stage: row.stage || 'Lead',
+    strategy: row.strategy || 'Manual',
+    askingPrice: toNumber(row.asking_price),
+    source: row.source || '',
+    notes: row.notes || '',
+    monthlyProfit: row.monthly_profit === null ? null : toNumber(row.monthly_profit),
+    yield: row.yield === null ? null : toNumber(row.yield),
+    dateAdded: row.date_added || row.created_at,
+    updatedAt: row.updated_at,
+    cloud: true,
+  };
+}
+
+function toPipelineRow(userId, item) {
+  return {
+    user_id: userId,
+    local_id: getLocalId(item),
+    source_deal_id: item.sourceDealId || null,
+    title: item.title || item.name || 'Untitled opportunity',
+    stage: item.stage || 'Lead',
+    strategy: item.strategy || 'Manual',
+    asking_price: toNumber(item.askingPrice),
+    source: item.source || '',
+    notes: item.notes || '',
+    monthly_profit: item.monthlyProfit ?? null,
+    yield: item.yield ?? null,
+    date_added: item.dateAdded || item.createdAt || new Date().toISOString(),
+  };
+}
+
+function fromPortfolioRow(row) {
+  return {
+    id: row.id,
+    localId: row.local_id,
+    sourceDealId: row.source_deal_id,
+    name: row.name,
+    purchasePrice: toNumber(row.purchase_price),
+    currentValue: toNumber(row.current_value),
+    monthlyRent: toNumber(row.monthly_rent),
+    mortgageBalance: toNumber(row.mortgage_balance),
+    notes: row.notes || '',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    cloud: true,
+  };
+}
+
+function toPortfolioRow(userId, item) {
+  return {
+    user_id: userId,
+    local_id: getLocalId(item),
+    source_deal_id: item.sourceDealId || null,
+    name: item.name || item.title || 'Portfolio property',
+    purchase_price: toNumber(item.purchasePrice),
+    current_value: toNumber(item.currentValue),
+    monthly_rent: toNumber(item.monthlyRent),
+    mortgage_balance: toNumber(item.mortgageBalance),
+    notes: item.notes || '',
+  };
+}
+
+function fromContactRow(row) {
+  return {
+    id: row.id,
+    localId: row.local_id,
+    name: row.name,
+    role: row.role || 'Agent',
+    email: row.email || '',
+    phone: row.phone || '',
+    notes: row.notes || '',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    cloud: true,
+  };
+}
+
+function toContactRow(userId, item) {
+  return {
+    user_id: userId,
+    local_id: getLocalId(item),
+    name: item.name || 'Unnamed contact',
+    role: item.role || 'Agent',
+    email: item.email || '',
+    phone: item.phone || '',
+    notes: item.notes || '',
+  };
+}
+
+async function fetchCloudRows(table, mapper) {
+  const { data, error } = await supabase
+    .from(table)
+    .select('*')
+    .order(table === 'pipeline_items' ? 'date_added' : 'created_at', { ascending: false });
+  if (error) throw error;
+  return (data || []).map(mapper);
+}
+
+async function insertCloudRow(table, row, mapper) {
+  const { data, error } = await supabase.from(table).insert(row).select('*').single();
+  if (error) throw error;
+  return mapper(data);
+}
+
+async function updateCloudRow(table, id, values, mapper) {
+  const { data, error } = await supabase.from(table).update(values).eq('id', id).select('*').single();
+  if (error) throw error;
+  return mapper(data);
+}
+
+async function deleteCloudRow(table, id) {
+  const { error } = await supabase.from(table).delete().eq('id', id);
+  if (error) throw error;
+}
+
+function createPipelineItemFromDeal(deal, stage = 'Lead') {
   const title = deal.name || deal.title || 'Untitled opportunity';
-  const existingIndex = pipelineDeals.findIndex((item) => item.sourceDealId === deal.id || item.title === title);
   const sourceInputs = deal.inputs || {};
-  const pipelineDeal = {
-    id: existingIndex >= 0 ? pipelineDeals[existingIndex].id : crypto.randomUUID(),
-    sourceDealId: deal.id || deal.dealId || null,
+  return {
+    id: crypto.randomUUID(),
+    sourceDealId: deal.id || deal.dealId || deal.localId || null,
     title,
     stage,
     strategy: deal.strategy || deal.type || 'BRRR',
@@ -298,6 +467,80 @@ function addDealToPipeline(deal, stage = 'Lead') {
     dateAdded: deal.dateAdded || deal.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
+}
+
+function createPortfolioPropertyFromDeal(deal) {
+  const sourceInputs = deal.inputs || {};
+  return {
+    id: crypto.randomUUID(),
+    sourceDealId: deal.id || deal.dealId || deal.localId || null,
+    name: deal.name || deal.title || 'Portfolio property',
+    purchasePrice: toNumber(sourceInputs.purchasePrice || sourceInputs.propertyValue),
+    currentValue: toNumber(sourceInputs.refinanceValue || sourceInputs.currentMarketValue || sourceInputs.propertyValue || sourceInputs.purchasePrice),
+    monthlyRent: toNumber(sourceInputs.monthlyRent || sourceInputs.longTermRent),
+    mortgageBalance: deal.metrics?.refinanceLoan || 0,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+async function addDealToCloudPipeline(user, deal, stage = 'Lead') {
+  const pipelineItem = createPipelineItemFromDeal(deal, stage);
+  return insertCloudRow('pipeline_items', toPipelineRow(user.id, pipelineItem), fromPipelineRow);
+}
+
+async function addDealToCloudPortfolio(user, deal) {
+  const property = createPortfolioPropertyFromDeal(deal);
+  return insertCloudRow('portfolio_properties', toPortfolioRow(user.id, property), fromPortfolioRow);
+}
+
+async function migrateLocalWorkspaceToCloud(user) {
+  if (!hasCloudWorkspace(user)) {
+    throw new Error('Sign in to move local data to your account.');
+  }
+
+  const localSavedDeals = loadSavedDeals().map((deal) => ({
+    ...deal,
+    type: 'Deal',
+    title: deal.name,
+    route: '/brrr',
+    strategy: 'BRRR',
+  }));
+  const localVaultItems = loadDealVault();
+  const savedDealLocalIds = new Set(localSavedDeals.map((deal) => getLocalId(deal)));
+  const vaultRows = localVaultItems.filter((item) => !savedDealLocalIds.has(item.dealId || item.id));
+  const savedDealRows = [...localSavedDeals, ...vaultRows].map((item) => toSavedDealRow(user.id, item));
+  const pipelineRows = loadPipelineDeals().map((item) => toPipelineRow(user.id, item));
+  const portfolioRows = loadPortfolioProperties().map((item) => toPortfolioRow(user.id, item));
+  const contactRows = loadInvestorContacts().map((item) => toContactRow(user.id, item));
+
+  const jobs = [
+    ['saved_deals', savedDealRows],
+    ['pipeline_items', pipelineRows],
+    ['portfolio_properties', portfolioRows],
+    ['investor_contacts', contactRows],
+  ].filter(([, rows]) => rows.length > 0);
+
+  for (const [table, rows] of jobs) {
+    const { error } = await supabase
+      .from(table)
+      .upsert(rows, { onConflict: 'user_id,local_id' });
+    if (error) throw error;
+  }
+
+  return {
+    savedDeals: savedDealRows.length,
+    pipelineItems: pipelineRows.length,
+    portfolioProperties: portfolioRows.length,
+    investorContacts: contactRows.length,
+  };
+}
+
+function addDealToPipeline(deal, stage = 'Lead') {
+  const pipelineDeals = loadPipelineDeals();
+  const pipelineDeal = createPipelineItemFromDeal(deal, stage);
+  const title = pipelineDeal.title;
+  const existingIndex = pipelineDeals.findIndex((item) => item.sourceDealId === deal.id || item.title === title);
+  if (existingIndex >= 0) pipelineDeal.id = pipelineDeals[existingIndex].id;
   const nextPipelineDeals = existingIndex >= 0
     ? pipelineDeals.map((item, index) => (index === existingIndex ? { ...item, ...pipelineDeal } : item))
     : [pipelineDeal, ...pipelineDeals];
@@ -307,17 +550,7 @@ function addDealToPipeline(deal, stage = 'Lead') {
 
 function addDealToPortfolio(deal) {
   const properties = loadPortfolioProperties();
-  const sourceInputs = deal.inputs || {};
-  const property = {
-    id: crypto.randomUUID(),
-    sourceDealId: deal.id || deal.dealId || null,
-    name: deal.name || deal.title || 'Portfolio property',
-    purchasePrice: toNumber(sourceInputs.purchasePrice || sourceInputs.propertyValue),
-    currentValue: toNumber(sourceInputs.refinanceValue || sourceInputs.currentMarketValue || sourceInputs.propertyValue || sourceInputs.purchasePrice),
-    monthlyRent: toNumber(sourceInputs.monthlyRent || sourceInputs.longTermRent),
-    mortgageBalance: deal.metrics?.refinanceLoan || 0,
-    createdAt: new Date().toISOString(),
-  };
+  const property = createPortfolioPropertyFromDeal(deal);
   const nextProperties = [property, ...properties];
   savePortfolioProperties(nextProperties);
   return nextProperties;
@@ -484,6 +717,53 @@ function getDashboardStats() {
     upgradeIntent,
     syncStatus: loadSyncStatus(),
     recentVaultItems: vaultItems.slice(0, 3),
+    recentPipelineDeals: pipelineDeals.slice(0, 3),
+    recentDeals: recentAnalyses.slice(0, 3),
+  };
+}
+
+async function getCloudDashboardStats() {
+  const [savedDeals, pipelineDeals, portfolioProperties, investorContacts] = await Promise.all([
+    fetchCloudRows('saved_deals', fromSavedDealRow),
+    fetchCloudRows('pipeline_items', fromPipelineRow),
+    fetchCloudRows('portfolio_properties', fromPortfolioRow),
+    fetchCloudRows('investor_contacts', fromContactRow),
+  ]);
+  const vaultDealItems = savedDeals.filter((item) => item.type === 'Deal');
+  const recentAnalyses = vaultDealItems
+    .map((deal) => ({
+      id: deal.id,
+      name: deal.name || deal.title,
+      metric: deal.metrics?.monthlyCashflow ?? deal.metrics?.monthlyProfit,
+      metricLabel: deal.metrics?.monthlyProfit === undefined ? 'monthly cashflow' : 'monthly profit',
+      createdAt: deal.createdAt,
+    }))
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  const bestRoi = vaultDealItems.reduce((best, deal) => Math.max(best, deal.metrics?.returnOnTotalCapitalInvested ?? deal.metrics?.cashOnCashRoi ?? 0), 0);
+  const bestCashflow = vaultDealItems.reduce((best, deal) => Math.max(best, deal.metrics?.monthlyCashflow || deal.metrics?.monthlyProfit || 0), 0);
+  const portfolioTotals = portfolioProperties.reduce(
+    (summary, property) => ({
+      value: summary.value + toNumber(property.currentValue),
+      rent: summary.rent + toNumber(property.monthlyRent),
+      equity: summary.equity + Math.max(toNumber(property.currentValue) - toNumber(property.mortgageBalance), 0),
+    }),
+    { value: 0, rent: 0, equity: 0 },
+  );
+
+  return {
+    dealsAnalysed: vaultDealItems.length,
+    savedScenarios: savedDeals.filter((item) => item.type === 'Scenario').length,
+    vaultItems: savedDeals.length,
+    pipelineDeals: pipelineDeals.length,
+    portfolioProperties: portfolioProperties.length,
+    investorContacts: investorContacts.length,
+    portfolioTotals,
+    bestRoi,
+    bestCashflow,
+    account: loadAccount(),
+    upgradeIntent: loadUpgradeIntent(),
+    syncStatus: { state: 'cloud', message: 'Signed-in workspace data is loaded from Supabase.', updatedAt: new Date().toISOString() },
+    recentVaultItems: savedDeals.slice(0, 3),
     recentPipelineDeals: pipelineDeals.slice(0, 3),
     recentDeals: recentAnalyses.slice(0, 3),
   };
@@ -1537,9 +1817,46 @@ function AuthLayout({ label, title, copy, children }) {
 }
 
 function DashboardPage() {
-  const stats = getDashboardStats();
+  const { user } = useAuth();
+  const cloudWorkspace = hasCloudWorkspace(user);
+  const [stats, setStats] = useState(getDashboardStats);
   const [syncStatus, setSyncStatus] = useState(stats.syncStatus);
-  const [syncing, setSyncing] = useState(false);
+  const [cloudLoading, setCloudLoading] = useState(false);
+  const [cloudError, setCloudError] = useState('');
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadStats() {
+      if (!cloudWorkspace) {
+        const localStats = getDashboardStats();
+        setStats(localStats);
+        setSyncStatus(localStats.syncStatus);
+        setCloudError('');
+        setCloudLoading(false);
+        return;
+      }
+
+      setCloudLoading(true);
+      setCloudError('');
+      try {
+        const cloudStats = await getCloudDashboardStats();
+        if (!mounted) return;
+        setStats(cloudStats);
+        setSyncStatus(cloudStats.syncStatus);
+      } catch (error) {
+        if (mounted) setCloudError(error.message || 'Could not load dashboard workspace data.');
+      } finally {
+        if (mounted) setCloudLoading(false);
+      }
+    }
+
+    loadStats();
+
+    return () => {
+      mounted = false;
+    };
+  }, [cloudWorkspace, user?.id]);
   const modules = [
     {
       title: 'BRRR Analyzer',
@@ -1583,13 +1900,6 @@ function DashboardPage() {
     },
   ];
 
-  async function handleSync() {
-    setSyncing(true);
-    const nextStatus = await syncWorkspaceToCloud();
-    setSyncStatus(nextStatus);
-    setSyncing(false);
-  }
-
   return (
     <main className="page dashboard-page">
       <section className="page-hero compact">
@@ -1602,7 +1912,9 @@ function DashboardPage() {
         <div>
           <p className="eyebrow">Investor progress</p>
           <h2>Your investment operating view</h2>
-          <p>Track the evidence, opportunities and owned assets you are building. Data is stored locally in your browser until cloud sync is connected.</p>
+          <p>{cloudWorkspace ? 'Track the evidence, opportunities and owned assets saved to your signed-in account.' : 'Track the evidence, opportunities and owned assets stored locally in this browser.'}</p>
+          {cloudLoading && <p className="status-message">Loading cloud workspace...</p>}
+          {cloudError && <p className="status-message error">{cloudError}</p>}
         </div>
         <div className="dashboard-summary">
           <SummaryCard label="Deals Analysed" value={String(stats.dealsAnalysed)} copy="Saved underwriting records." />
@@ -1656,7 +1968,7 @@ function DashboardPage() {
           copy="Recent analyses, saved deals, notes and active opportunities are grouped into one calm operating view."
         />
         <div className="workspace-grid">
-          <DashboardPanel title="Recent Analyses" meta="Local browser">
+          <DashboardPanel title="Recent Analyses" meta={cloudWorkspace ? 'Cloud account' : 'Local browser'}>
             {stats.recentDeals.length > 0 ? (
               stats.recentDeals.map((deal) => (
                 <p key={deal.id}>{deal.name} · {formatMoney(deal.metric)} {deal.metricLabel}</p>
@@ -1686,7 +1998,7 @@ function DashboardPage() {
             <Link className="panel-link" to="/pipeline">Open pipeline</Link>
           </DashboardPanel>
           <DashboardPanel title="Account" meta={stats.account?.plan || 'Free'}>
-            <EmptyLine text={stats.account?.email ? `${stats.account.email} is using the local beta workspace.` : 'Create a free local workspace from the homepage.'} />
+            <EmptyLine text={user?.email ? `${user.email} is signed in with a cloud workspace.` : 'Sign in to save workspace data to your account.'} />
             {stats.upgradeIntent ? (
               <p>Upgrade interest: {stats.upgradeIntent.plan}</p>
             ) : (
@@ -1698,14 +2010,12 @@ function DashboardPage() {
 
       <section className="upgrade-strip glass-card">
         <div>
-          <p className="eyebrow">Cloud readiness</p>
-          <h2>{CLOUD_SYNC_ENABLED ? 'Cloud sync is configured' : 'Cloud sync is ready to connect'}</h2>
-          <p>{syncStatus?.message || 'Local data works now. Add Supabase environment variables and the workspace table to enable browser-to-cloud sync.'}</p>
+          <p className="eyebrow">Account workspace</p>
+          <h2>{cloudWorkspace ? 'Your workspace is cloud-connected' : 'Local workspace is still available'}</h2>
+          <p>{syncStatus?.message || 'Sign in to save Deal Vault, Pipeline, Portfolio and Investor CRM data against your Supabase account.'}</p>
         </div>
         <div className="hero-actions">
-          <button className="primary-btn" type="button" onClick={handleSync} disabled={syncing}>
-            {syncing ? 'Syncing...' : 'Sync Workspace'}
-          </button>
+          <Link className="primary-link" to="/account">Workspace Settings</Link>
           <Link className="secondary-link" to="/account">Account</Link>
         </div>
       </section>
@@ -1727,6 +2037,7 @@ function DashboardPage() {
 
 function BrrrAnalyzerPage() {
   const { user } = useAuth();
+  const cloudWorkspace = hasCloudWorkspace(user);
   const [inputs, setInputs] = useState(initialInputs);
   const [scenario, setScenario] = useState('expected');
   const [activeTab, setActiveTab] = useState('overview');
@@ -1737,6 +2048,41 @@ function BrrrAnalyzerPage() {
   const [noteDraft, setNoteDraft] = useState('');
   const [activeDealId, setActiveDealId] = useState(null);
   const [saveMessage, setSaveMessage] = useState('');
+  const [cloudLoading, setCloudLoading] = useState(false);
+  const [cloudError, setCloudError] = useState('');
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadWorkspaceData() {
+      if (!cloudWorkspace) {
+        setSavedDeals(loadSavedDeals());
+        setVaultItems(loadDealVault());
+        setCloudError('');
+        setCloudLoading(false);
+        return;
+      }
+
+      setCloudLoading(true);
+      setCloudError('');
+      try {
+        const rows = await fetchCloudRows('saved_deals', fromSavedDealRow);
+        if (!mounted) return;
+        setVaultItems(rows);
+        setSavedDeals(rows.filter((item) => item.type === 'Deal' && item.strategy === 'BRRR'));
+      } catch (error) {
+        if (mounted) setCloudError(error.message || 'Could not load your cloud workspace.');
+      } finally {
+        if (mounted) setCloudLoading(false);
+      }
+    }
+
+    loadWorkspaceData();
+
+    return () => {
+      mounted = false;
+    };
+  }, [cloudWorkspace, user?.id]);
 
   function updateInput(name, value) {
     setInputs((currentInputs) => ({ ...currentInputs, [name]: value }));
@@ -1853,7 +2199,7 @@ function BrrrAnalyzerPage() {
     localStorage.setItem(VAULT_STORAGE_KEY, JSON.stringify(nextVaultItems));
   }
 
-  function addVaultItem(type, title, copy) {
+  async function addVaultItem(type, title, copy) {
     if (!user) {
       setSaveMessage('Sign in to save deals, scenarios and notes.');
       return;
@@ -1867,12 +2213,22 @@ function BrrrAnalyzerPage() {
       route: '/brrr',
       scenario,
       dealName,
+      strategy: 'BRRR',
     };
-    saveVault([item, ...vaultItems]);
-    setSaveMessage(`${title} added to Deal Vault`);
+    try {
+      if (cloudWorkspace) {
+        const savedItem = await insertCloudRow('saved_deals', toSavedDealRow(user.id, item), fromSavedDealRow);
+        setVaultItems((currentItems) => [savedItem, ...currentItems]);
+      } else {
+        saveVault([item, ...vaultItems]);
+      }
+      setSaveMessage(`${title} added to Deal Vault`);
+    } catch (error) {
+      setSaveMessage(error.message || 'Could not save to your account.');
+    }
   }
 
-  function saveCurrentDeal() {
+  async function saveCurrentDeal() {
     if (!user) {
       setSaveMessage('Sign in to save this opportunity.');
       return;
@@ -1889,54 +2245,64 @@ function BrrrAnalyzerPage() {
       strategy: 'BRRR',
     };
 
-    saveDeals([deal, ...savedDeals]);
-    saveVault([
-      {
-        id: crypto.randomUUID(),
-        type: 'Deal',
-        title: deal.name,
-        copy: deal.notes || `${formatMoney(metrics.monthlyCashflow)} monthly cashflow · ${formatPercent(metrics.returnOnTotalCapitalInvested)} return on total capital`,
-        createdAt: deal.createdAt,
-        route: '/brrr',
-        scenario,
-        dealId: deal.id,
-        name: deal.name,
-        notes: deal.notes,
-        inputs: deal.inputs,
-        metrics: deal.metrics,
-        strategy: 'BRRR',
-      },
-      ...vaultItems,
-    ]);
-    setActiveDealId(deal.id);
-    setSaveMessage(`${deal.name} saved`);
+    const vaultDeal = {
+      ...deal,
+      type: 'Deal',
+      title: deal.name,
+      copy: deal.notes || `${formatMoney(metrics.monthlyCashflow)} monthly cashflow · ${formatPercent(metrics.returnOnTotalCapitalInvested)} return on total capital`,
+      route: '/brrr',
+      dealId: deal.id,
+    };
+
+    try {
+      if (cloudWorkspace) {
+        const savedDeal = await insertCloudRow('saved_deals', toSavedDealRow(user.id, vaultDeal), fromSavedDealRow);
+        setSavedDeals((currentDeals) => [savedDeal, ...currentDeals]);
+        setVaultItems((currentItems) => [savedDeal, ...currentItems]);
+        setActiveDealId(savedDeal.id);
+      } else {
+        saveDeals([deal, ...savedDeals]);
+        saveVault([vaultDeal, ...vaultItems]);
+        setActiveDealId(deal.id);
+      }
+      setSaveMessage(`${deal.name} saved`);
+    } catch (error) {
+      setSaveMessage(error.message || 'Could not save this opportunity.');
+    }
   }
 
-  function saveScenario() {
+  async function saveScenario() {
     if (!user) {
       setSaveMessage('Sign in to save scenarios.');
       return;
     }
-    addVaultItem(
+    await addVaultItem(
       'Scenario',
       `${dealName.trim() || createDefaultDealName(inputs, 'BRRR')} · ${scenario[0].toUpperCase()}${scenario.slice(1)}`,
       `${formatMoney(metrics.cashLeftInDeal)} left in deal · ${formatMoney(metrics.monthlyCashflow)} monthly cashflow`,
     );
   }
 
-  function addNote() {
+  async function addNote() {
     if (!user) {
       setSaveMessage('Sign in to save notes.');
       return;
     }
     const note = noteDraft.trim();
     if (!note) return;
-    addVaultItem('Note', 'Investor note', note);
+    await addVaultItem('Note', 'Investor note', note);
     setNoteDraft('');
   }
 
-  function deleteVaultItem(itemId) {
-    saveVault(vaultItems.filter((item) => item.id !== itemId));
+  async function deleteVaultItem(itemId) {
+    try {
+      if (cloudWorkspace) await deleteCloudRow('saved_deals', itemId);
+      const nextVaultItems = vaultItems.filter((item) => item.id !== itemId);
+      setVaultItems(nextVaultItems);
+      if (!cloudWorkspace) localStorage.setItem(VAULT_STORAGE_KEY, JSON.stringify(nextVaultItems));
+    } catch (error) {
+      setSaveMessage(error.message || 'Could not delete this item.');
+    }
   }
 
   function exportVault() {
@@ -1965,40 +2331,81 @@ function BrrrAnalyzerPage() {
     setSaveMessage(`${deal.name} loaded`);
   }
 
-  function renameDeal(dealId, nextName) {
+  async function renameDeal(dealId, nextName) {
     const cleanName = nextName.trim();
     if (!cleanName) return;
-    const nextDeals = savedDeals.map((deal) => (deal.id === dealId ? { ...deal, name: cleanName } : deal));
-    saveDeals(nextDeals);
-    saveVault(vaultItems.map((item) => (item.dealId === dealId ? { ...item, title: cleanName, name: cleanName } : item)));
-    if (activeDealId === dealId) setDealName(cleanName);
+    try {
+      if (cloudWorkspace) {
+        const updatedDeal = await updateCloudRow('saved_deals', dealId, { name: cleanName, title: cleanName }, fromSavedDealRow);
+        setSavedDeals((currentDeals) => currentDeals.map((deal) => (deal.id === dealId ? updatedDeal : deal)));
+        setVaultItems((currentItems) => currentItems.map((item) => (item.id === dealId ? updatedDeal : item)));
+      } else {
+        const nextDeals = savedDeals.map((deal) => (deal.id === dealId ? { ...deal, name: cleanName } : deal));
+        saveDeals(nextDeals);
+        saveVault(vaultItems.map((item) => (item.dealId === dealId ? { ...item, title: cleanName, name: cleanName } : item)));
+      }
+      if (activeDealId === dealId) setDealName(cleanName);
+    } catch (error) {
+      setSaveMessage(error.message || 'Could not rename this deal.');
+    }
   }
 
-  function addDealNote(dealId, note) {
+  async function addDealNote(dealId, note) {
     const cleanNote = note.trim();
     if (!cleanNote) return;
-    saveDeals(savedDeals.map((deal) => (deal.id === dealId ? { ...deal, notes: cleanNote } : deal)));
     const deal = savedDeals.find((item) => item.id === dealId);
-    if (deal) addVaultItem('Note', `${deal.name} note`, cleanNote);
+    try {
+      if (cloudWorkspace) {
+        const updatedDeal = await updateCloudRow('saved_deals', dealId, { notes: cleanNote }, fromSavedDealRow);
+        setSavedDeals((currentDeals) => currentDeals.map((item) => (item.id === dealId ? updatedDeal : item)));
+        setVaultItems((currentItems) => currentItems.map((item) => (item.id === dealId ? updatedDeal : item)));
+      } else {
+        saveDeals(savedDeals.map((item) => (item.id === dealId ? { ...item, notes: cleanNote } : item)));
+      }
+      if (deal) await addVaultItem('Note', `${deal.name} note`, cleanNote);
+    } catch (error) {
+      setSaveMessage(error.message || 'Could not save this note.');
+    }
   }
 
-  function moveSavedDealToPipeline(deal) {
-    addDealToPipeline(deal, 'Analysing');
-    setSaveMessage(`${deal.name} moved to pipeline`);
+  async function moveSavedDealToPipeline(deal) {
+    try {
+      if (cloudWorkspace) await addDealToCloudPipeline(user, deal, 'Analysing');
+      else addDealToPipeline(deal, 'Analysing');
+      setSaveMessage(`${deal.name} moved to pipeline`);
+    } catch (error) {
+      setSaveMessage(error.message || 'Could not move this deal to pipeline.');
+    }
   }
 
-  function moveSavedDealToPortfolio(deal) {
-    addDealToPortfolio(deal);
-    setSaveMessage(`${deal.name} added to portfolio`);
+  async function moveSavedDealToPortfolio(deal) {
+    try {
+      if (cloudWorkspace) await addDealToCloudPortfolio(user, deal);
+      else addDealToPortfolio(deal);
+      setSaveMessage(`${deal.name} added to portfolio`);
+    } catch (error) {
+      setSaveMessage(error.message || 'Could not add this deal to portfolio.');
+    }
   }
 
-  function deleteDeal(dealId) {
-    const nextDeals = savedDeals.filter((deal) => deal.id !== dealId);
-    saveDeals(nextDeals);
+  async function deleteDeal(dealId) {
+    try {
+      if (cloudWorkspace) await deleteCloudRow('saved_deals', dealId);
+      const nextDeals = savedDeals.filter((deal) => deal.id !== dealId);
+      const nextVaultItems = vaultItems.filter((item) => item.id !== dealId && item.dealId !== dealId);
+      setSavedDeals(nextDeals);
+      setVaultItems(nextVaultItems);
+      if (!cloudWorkspace) {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(nextDeals));
+        localStorage.setItem(VAULT_STORAGE_KEY, JSON.stringify(nextVaultItems));
+      }
 
-    if (activeDealId === dealId) {
-      setActiveDealId(null);
-      setSaveMessage('');
+      if (activeDealId === dealId) {
+        setActiveDealId(null);
+        setSaveMessage('');
+      }
+    } catch (error) {
+      setSaveMessage(error.message || 'Could not delete this deal.');
     }
   }
 
@@ -2029,6 +2436,13 @@ function BrrrAnalyzerPage() {
           </button>
         </div>
       </section>
+
+      {(cloudLoading || cloudError) && (
+        <section className="cloud-status-row">
+          {cloudLoading && <p className="status-message">Loading cloud workspace...</p>}
+          {cloudError && <p className="status-message error">{cloudError}</p>}
+        </section>
+      )}
 
       <section className="summary-strip" aria-label="Deal summary">
         <SummaryCard label="Monthly Cashflow" value={formatMoney(metrics.monthlyCashflow)} copy="After mortgage, running costs and void allowance." />
@@ -2145,6 +2559,7 @@ function BrrrAnalyzerPage() {
 
 function AirbnbAnalyzerPage() {
   const { user } = useAuth();
+  const cloudWorkspace = hasCloudWorkspace(user);
   const [inputs, setInputs] = useState(initialAirbnbInputs);
   const [scenario, setScenario] = useState('expected');
   const [activeTab, setActiveTab] = useState('overview');
@@ -2154,6 +2569,38 @@ function AirbnbAnalyzerPage() {
   const [vaultItems, setVaultItems] = useState(loadDealVault);
   const [noteDraft, setNoteDraft] = useState('');
   const [saveMessage, setSaveMessage] = useState('');
+  const [cloudLoading, setCloudLoading] = useState(false);
+  const [cloudError, setCloudError] = useState('');
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadWorkspaceData() {
+      if (!cloudWorkspace) {
+        setVaultItems(loadDealVault());
+        setCloudError('');
+        setCloudLoading(false);
+        return;
+      }
+
+      setCloudLoading(true);
+      setCloudError('');
+      try {
+        const rows = await fetchCloudRows('saved_deals', fromSavedDealRow);
+        if (mounted) setVaultItems(rows);
+      } catch (error) {
+        if (mounted) setCloudError(error.message || 'Could not load your cloud workspace.');
+      } finally {
+        if (mounted) setCloudLoading(false);
+      }
+    }
+
+    loadWorkspaceData();
+
+    return () => {
+      mounted = false;
+    };
+  }, [cloudWorkspace, user?.id]);
 
   function updateInput(name, value) {
     setInputs((currentInputs) => ({ ...currentInputs, [name]: value }));
@@ -2266,7 +2713,7 @@ function AirbnbAnalyzerPage() {
     localStorage.setItem(VAULT_STORAGE_KEY, JSON.stringify(nextVaultItems));
   }
 
-  function addVaultItem(type, title, copy) {
+  async function addVaultItem(type, title, copy) {
     if (!user) {
       setSaveMessage('Sign in to save deals, scenarios and notes.');
       return;
@@ -2284,61 +2731,84 @@ function AirbnbAnalyzerPage() {
       inputs: { ...inputs },
       metrics: { ...metrics },
     };
-    saveVault([item, ...vaultItems]);
-    setSaveMessage(`${title} added to Deal Vault`);
+    try {
+      if (cloudWorkspace) {
+        const savedItem = await insertCloudRow('saved_deals', toSavedDealRow(user.id, item), fromSavedDealRow);
+        setVaultItems((currentItems) => [savedItem, ...currentItems]);
+      } else {
+        saveVault([item, ...vaultItems]);
+      }
+      setSaveMessage(`${title} added to Deal Vault`);
+    } catch (error) {
+      setSaveMessage(error.message || 'Could not save to your account.');
+    }
   }
 
-  function saveCurrentDeal() {
+  async function saveCurrentDeal() {
     if (!user) {
       setSaveMessage('Sign in to save this opportunity.');
       return;
     }
     const cleanName = dealName.trim() || createDefaultDealName({ purchasePrice: inputs.purchasePrice }, 'SA');
-    saveVault([
-      {
-        id: crypto.randomUUID(),
-        type: 'Deal',
-        title: cleanName,
-        copy: dealNote.trim() || `${formatMoney(metrics.monthlyProfit)} monthly profit · ${formatMoney(metrics.monthlyDifference)} versus BTL`,
-        createdAt: new Date().toISOString(),
-        route: '/airbnb',
-        scenario,
-        name: cleanName,
-        notes: dealNote.trim(),
-        inputs: { ...inputs },
-        metrics: { ...metrics },
-        strategy: 'Serviced Accommodation',
-      },
-      ...vaultItems,
-    ]);
-    setSaveMessage(`${cleanName} saved`);
+    const item = {
+      id: crypto.randomUUID(),
+      type: 'Deal',
+      title: cleanName,
+      copy: dealNote.trim() || `${formatMoney(metrics.monthlyProfit)} monthly profit · ${formatMoney(metrics.monthlyDifference)} versus BTL`,
+      createdAt: new Date().toISOString(),
+      route: '/airbnb',
+      scenario,
+      name: cleanName,
+      notes: dealNote.trim(),
+      inputs: { ...inputs },
+      metrics: { ...metrics },
+      strategy: 'Serviced Accommodation',
+    };
+    try {
+      if (cloudWorkspace) {
+        const savedItem = await insertCloudRow('saved_deals', toSavedDealRow(user.id, item), fromSavedDealRow);
+        setVaultItems((currentItems) => [savedItem, ...currentItems]);
+      } else {
+        saveVault([item, ...vaultItems]);
+      }
+      setSaveMessage(`${cleanName} saved`);
+    } catch (error) {
+      setSaveMessage(error.message || 'Could not save this opportunity.');
+    }
   }
 
-  function saveScenario() {
+  async function saveScenario() {
     if (!user) {
       setSaveMessage('Sign in to save scenarios.');
       return;
     }
-    addVaultItem(
+    await addVaultItem(
       'Scenario',
       `${dealName.trim() || createDefaultDealName({ purchasePrice: inputs.purchasePrice }, 'SA')} · ${scenario[0].toUpperCase()}${scenario.slice(1)}`,
       `${formatMoney(metrics.monthlyProfit)} monthly profit · ${formatPercent(metrics.airbnbYield)} SA yield`,
     );
   }
 
-  function addNote() {
+  async function addNote() {
     if (!user) {
       setSaveMessage('Sign in to save notes.');
       return;
     }
     const note = noteDraft.trim();
     if (!note) return;
-    addVaultItem('Note', 'SA investor note', note);
+    await addVaultItem('Note', 'SA investor note', note);
     setNoteDraft('');
   }
 
-  function deleteVaultItem(itemId) {
-    saveVault(vaultItems.filter((item) => item.id !== itemId));
+  async function deleteVaultItem(itemId) {
+    try {
+      if (cloudWorkspace) await deleteCloudRow('saved_deals', itemId);
+      const nextVaultItems = vaultItems.filter((item) => item.id !== itemId);
+      setVaultItems(nextVaultItems);
+      if (!cloudWorkspace) localStorage.setItem(VAULT_STORAGE_KEY, JSON.stringify(nextVaultItems));
+    } catch (error) {
+      setSaveMessage(error.message || 'Could not delete this item.');
+    }
   }
 
   function exportVault() {
@@ -2363,6 +2833,13 @@ function AirbnbAnalyzerPage() {
           </button>
         </div>
       </section>
+
+      {(cloudLoading || cloudError) && (
+        <section className="cloud-status-row">
+          {cloudLoading && <p className="status-message">Loading cloud workspace...</p>}
+          {cloudError && <p className="status-message error">{cloudError}</p>}
+        </section>
+      )}
 
       <section className="summary-strip" aria-label="Serviced accommodation summary">
         <SummaryCard label="Monthly Profit" value={formatMoney(metrics.monthlyProfit)} copy="After platform, management, bills, cleaning and finance costs." />
@@ -2667,30 +3144,81 @@ function PricingPage() {
 }
 
 function VaultPage() {
+  const { user } = useAuth();
+  const cloudWorkspace = hasCloudWorkspace(user);
   const [vaultItems, setVaultItems] = useState(loadDealVault);
   const [message, setMessage] = useState('');
+  const [cloudLoading, setCloudLoading] = useState(false);
+  const [cloudError, setCloudError] = useState('');
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadVault() {
+      if (!cloudWorkspace) {
+        setVaultItems(loadDealVault());
+        setCloudError('');
+        setCloudLoading(false);
+        return;
+      }
+
+      setCloudLoading(true);
+      setCloudError('');
+      try {
+        const rows = await fetchCloudRows('saved_deals', fromSavedDealRow);
+        if (mounted) setVaultItems(rows);
+      } catch (error) {
+        if (mounted) setCloudError(error.message || 'Could not load Deal Vault.');
+      } finally {
+        if (mounted) setCloudLoading(false);
+      }
+    }
+
+    loadVault();
+
+    return () => {
+      mounted = false;
+    };
+  }, [cloudWorkspace, user?.id]);
 
   function saveVault(nextVaultItems) {
     setVaultItems(nextVaultItems);
     localStorage.setItem(VAULT_STORAGE_KEY, JSON.stringify(nextVaultItems));
   }
 
-  function deleteVaultItem(itemId) {
-    saveVault(vaultItems.filter((item) => item.id !== itemId));
+  async function deleteVaultItem(itemId) {
+    try {
+      if (cloudWorkspace) await deleteCloudRow('saved_deals', itemId);
+      const nextItems = vaultItems.filter((item) => item.id !== itemId);
+      setVaultItems(nextItems);
+      if (!cloudWorkspace) localStorage.setItem(VAULT_STORAGE_KEY, JSON.stringify(nextItems));
+    } catch (error) {
+      setMessage(error.message || 'Could not delete this vault item.');
+    }
   }
 
   function exportVault() {
     downloadTextFile('acquiraiq-deal-vault.json', JSON.stringify(vaultItems, null, 2), 'application/json');
   }
 
-  function moveVaultItemToPipeline(item) {
-    addDealToPipeline(item, 'Analysing');
-    setMessage(`${item.title} moved to pipeline`);
+  async function moveVaultItemToPipeline(item) {
+    try {
+      if (cloudWorkspace) await addDealToCloudPipeline(user, item, 'Analysing');
+      else addDealToPipeline(item, 'Analysing');
+      setMessage(`${item.title} moved to pipeline`);
+    } catch (error) {
+      setMessage(error.message || 'Could not move this item to pipeline.');
+    }
   }
 
-  function moveVaultItemToPortfolio(item) {
-    addDealToPortfolio(item);
-    setMessage(`${item.title} added to portfolio`);
+  async function moveVaultItemToPortfolio(item) {
+    try {
+      if (cloudWorkspace) await addDealToCloudPortfolio(user, item);
+      else addDealToPortfolio(item);
+      setMessage(`${item.title} added to portfolio`);
+    } catch (error) {
+      setMessage(error.message || 'Could not add this item to portfolio.');
+    }
   }
 
   return (
@@ -2703,9 +3231,11 @@ function VaultPage() {
 
       <section className="upgrade-strip glass-card">
         <div>
-          <p className="eyebrow">Local vault</p>
+          <p className="eyebrow">{cloudWorkspace ? 'Cloud vault' : 'Local vault'}</p>
           <h2>{vaultItems.length} saved items</h2>
-          <p>Export your vault before clearing browser data. Cloud sync should be the next backend milestone.</p>
+          <p>{cloudWorkspace ? 'These items are saved against your signed-in Supabase account.' : 'Sign in to use account-based cloud storage. Local browser data remains available until migrated.'}</p>
+          {cloudLoading && <p className="status-message">Loading cloud workspace...</p>}
+          {cloudError && <p className="status-message error">{cloudError}</p>}
           {message && <p className="status-message">{message}</p>}
         </div>
         <div className="hero-actions">
@@ -2744,12 +3274,12 @@ function VaultPage() {
 }
 
 function AccountPage() {
+  const { user } = useAuth();
   const [account, setAccount] = useState(loadAccount);
   const [email, setEmail] = useState(account?.email || '');
   const [name, setName] = useState(account?.name || '');
-  const [syncStatus, setSyncStatus] = useState(loadSyncStatus);
   const [message, setMessage] = useState('');
-  const [syncing, setSyncing] = useState(false);
+  const [migrating, setMigrating] = useState(false);
 
   function saveProfile() {
     const nextAccount = {
@@ -2765,11 +3295,23 @@ function AccountPage() {
     setMessage('Account saved');
   }
 
-  async function handleSync() {
-    setSyncing(true);
-    const nextStatus = await syncWorkspaceToCloud();
-    setSyncStatus(nextStatus);
-    setSyncing(false);
+  async function handleMigration() {
+    if (!user) {
+      setMessage('Sign in before moving local data to your account.');
+      return;
+    }
+    setMigrating(true);
+    setMessage('');
+    try {
+      const result = await migrateLocalWorkspaceToCloud(user);
+      setMessage(
+        `Local data copied to your account: ${result.savedDeals} vault items, ${result.pipelineItems} pipeline items, ${result.portfolioProperties} properties and ${result.investorContacts} contacts. Local data was not deleted.`,
+      );
+    } catch (error) {
+      setMessage(error.message || 'Could not move local data to your account.');
+    } finally {
+      setMigrating(false);
+    }
   }
 
   function exportWorkspace() {
@@ -2785,7 +3327,6 @@ function clearLocalWorkspace() {
     localStorage.removeItem(CONTACTS_STORAGE_KEY);
     localStorage.removeItem(UPGRADE_STORAGE_KEY);
     localStorage.removeItem(SYNC_STATUS_STORAGE_KEY);
-    setSyncStatus(null);
     setMessage('Local deals, vault items and upgrade intent cleared');
   }
 
@@ -2813,20 +3354,24 @@ function clearLocalWorkspace() {
         </div>
 
         <div className="panel">
-          <PanelHeading label="Cloud sync" title="Supabase Ready" meta={CLOUD_SYNC_ENABLED ? 'Configured' : 'Local only'} />
+          <PanelHeading label="Cloud workspace" title="Supabase Account Data" meta={user ? 'Signed in' : 'Sign in required'} />
           <div className="verdict-box">
             <span>Status</span>
-            <p>{syncStatus?.message || 'Add Supabase environment variables to sync this workspace to a cloud table.'}</p>
+            <p>{user ? 'Signed-in users now save Deal Vault, Pipeline, Portfolio and Investor Contacts data against their Supabase account.' : 'Sign in to save workspace data to your Supabase account.'}</p>
           </div>
           <MiniTable
             title="Required environment"
             rows={[
               { label: 'VITE_SUPABASE_URL', value: SUPABASE_URL ? 'Set' : 'Missing' },
               { label: 'VITE_SUPABASE_ANON_KEY', value: SUPABASE_ANON_KEY ? 'Set' : 'Missing' },
-              { label: 'Table', value: 'workspaces' },
+              { label: 'Workspace tables', value: 'saved_deals, pipeline, portfolio, contacts' },
             ]}
           />
-          <button className="primary-btn" type="button" onClick={handleSync} disabled={syncing}>{syncing ? 'Syncing...' : 'Sync Workspace'}</button>
+          <div className="stacked-actions">
+            <button className="primary-btn" type="button" onClick={handleMigration} disabled={migrating || !user}>
+              {migrating ? 'Moving data...' : 'Move my local data to my account'}
+            </button>
+          </div>
         </div>
 
         <div className="panel">
@@ -3004,6 +3549,8 @@ function OperatingSystemPage() {
 }
 
 function PortfolioPage() {
+  const { user } = useAuth();
+  const cloudWorkspace = hasCloudWorkspace(user);
   const [properties, setProperties] = useState(loadPortfolioProperties);
   const [forecast, setForecast] = useState({ years: '5', valueGrowth: '3', rentGrowth: '2' });
   const [form, setForm] = useState({
@@ -3013,6 +3560,38 @@ function PortfolioPage() {
     monthlyRent: '',
     mortgageBalance: '',
   });
+  const [cloudLoading, setCloudLoading] = useState(false);
+  const [cloudError, setCloudError] = useState('');
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadProperties() {
+      if (!cloudWorkspace) {
+        setProperties(loadPortfolioProperties());
+        setCloudError('');
+        setCloudLoading(false);
+        return;
+      }
+
+      setCloudLoading(true);
+      setCloudError('');
+      try {
+        const rows = await fetchCloudRows('portfolio_properties', fromPortfolioRow);
+        if (mounted) setProperties(rows);
+      } catch (error) {
+        if (mounted) setCloudError(error.message || 'Could not load portfolio properties.');
+      } finally {
+        if (mounted) setCloudLoading(false);
+      }
+    }
+
+    loadProperties();
+
+    return () => {
+      mounted = false;
+    };
+  }, [cloudWorkspace, user?.id]);
 
   function updateForm(name, value) {
     setForm((current) => ({ ...current, [name]: value }));
@@ -3023,7 +3602,7 @@ function PortfolioPage() {
     savePortfolioProperties(nextProperties);
   }
 
-  function addProperty() {
+  async function addProperty() {
     const propertyName = form.name.trim();
     if (!propertyName) return;
     const property = {
@@ -3035,12 +3614,28 @@ function PortfolioPage() {
       mortgageBalance: toNumber(form.mortgageBalance),
       createdAt: new Date().toISOString(),
     };
-    saveProperties([property, ...properties]);
-    setForm({ name: '', purchasePrice: '', currentValue: '', monthlyRent: '', mortgageBalance: '' });
+    try {
+      if (cloudWorkspace) {
+        const savedProperty = await insertCloudRow('portfolio_properties', toPortfolioRow(user.id, property), fromPortfolioRow);
+        setProperties((currentProperties) => [savedProperty, ...currentProperties]);
+      } else {
+        saveProperties([property, ...properties]);
+      }
+      setForm({ name: '', purchasePrice: '', currentValue: '', monthlyRent: '', mortgageBalance: '' });
+    } catch (error) {
+      setCloudError(error.message || 'Could not save this property.');
+    }
   }
 
-  function deleteProperty(propertyId) {
-    saveProperties(properties.filter((property) => property.id !== propertyId));
+  async function deleteProperty(propertyId) {
+    try {
+      if (cloudWorkspace) await deleteCloudRow('portfolio_properties', propertyId);
+      const nextProperties = properties.filter((property) => property.id !== propertyId);
+      setProperties(nextProperties);
+      if (!cloudWorkspace) savePortfolioProperties(nextProperties);
+    } catch (error) {
+      setCloudError(error.message || 'Could not delete this property.');
+    }
   }
 
   const totals = properties.reduce(
@@ -3072,10 +3667,16 @@ function PortfolioPage() {
         <SummaryCard label="Total Monthly Rent" value={formatMoney(totals.rent)} copy="Gross rent across tracked properties." />
         <SummaryCard label="Estimated Equity" value={formatMoney(totals.equity)} copy="Current value less mortgage balance." />
       </section>
+      {(cloudLoading || cloudError) && (
+        <section className="cloud-status-row">
+          {cloudLoading && <p className="status-message">Loading cloud portfolio...</p>}
+          {cloudError && <p className="status-message error">{cloudError}</p>}
+        </section>
+      )}
 
       <section className="workspace-layout">
         <div className="panel">
-          <PanelHeading label="Add property" title="Property Details" meta="Local" />
+          <PanelHeading label="Add property" title="Property Details" meta={cloudWorkspace ? 'Cloud' : 'Local'} />
           <label className="note-entry"><span>Name / address</span><input value={form.name} onChange={(event) => updateForm('name', event.target.value)} placeholder="12 High Street, Birmingham" /></label>
           <label className="note-entry"><span>Purchase price</span><input type="number" value={form.purchasePrice} onChange={(event) => updateForm('purchasePrice', event.target.value)} /></label>
           <label className="note-entry"><span>Current value</span><input type="number" value={form.currentValue} onChange={(event) => updateForm('currentValue', event.target.value)} /></label>
@@ -3136,8 +3737,42 @@ function PortfolioPage() {
 }
 
 function InvestorContactsPage() {
+  const { user } = useAuth();
+  const cloudWorkspace = hasCloudWorkspace(user);
   const [contacts, setContacts] = useState(loadInvestorContacts);
   const [form, setForm] = useState({ name: '', role: 'Agent', email: '', phone: '', notes: '' });
+  const [cloudLoading, setCloudLoading] = useState(false);
+  const [cloudError, setCloudError] = useState('');
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadContacts() {
+      if (!cloudWorkspace) {
+        setContacts(loadInvestorContacts());
+        setCloudError('');
+        setCloudLoading(false);
+        return;
+      }
+
+      setCloudLoading(true);
+      setCloudError('');
+      try {
+        const rows = await fetchCloudRows('investor_contacts', fromContactRow);
+        if (mounted) setContacts(rows);
+      } catch (error) {
+        if (mounted) setCloudError(error.message || 'Could not load investor contacts.');
+      } finally {
+        if (mounted) setCloudLoading(false);
+      }
+    }
+
+    loadContacts();
+
+    return () => {
+      mounted = false;
+    };
+  }, [cloudWorkspace, user?.id]);
 
   function updateForm(name, value) {
     setForm((current) => ({ ...current, [name]: value }));
@@ -3148,14 +3783,31 @@ function InvestorContactsPage() {
     saveInvestorContacts(nextContacts);
   }
 
-  function addContact() {
+  async function addContact() {
     if (!form.name.trim()) return;
-    saveContacts([{ ...form, id: crypto.randomUUID(), createdAt: new Date().toISOString() }, ...contacts]);
-    setForm({ name: '', role: 'Agent', email: '', phone: '', notes: '' });
+    const contact = { ...form, id: crypto.randomUUID(), createdAt: new Date().toISOString() };
+    try {
+      if (cloudWorkspace) {
+        const savedContact = await insertCloudRow('investor_contacts', toContactRow(user.id, contact), fromContactRow);
+        setContacts((currentContacts) => [savedContact, ...currentContacts]);
+      } else {
+        saveContacts([contact, ...contacts]);
+      }
+      setForm({ name: '', role: 'Agent', email: '', phone: '', notes: '' });
+    } catch (error) {
+      setCloudError(error.message || 'Could not save this contact.');
+    }
   }
 
-  function deleteContact(contactId) {
-    saveContacts(contacts.filter((contact) => contact.id !== contactId));
+  async function deleteContact(contactId) {
+    try {
+      if (cloudWorkspace) await deleteCloudRow('investor_contacts', contactId);
+      const nextContacts = contacts.filter((contact) => contact.id !== contactId);
+      setContacts(nextContacts);
+      if (!cloudWorkspace) saveInvestorContacts(nextContacts);
+    } catch (error) {
+      setCloudError(error.message || 'Could not delete this contact.');
+    }
   }
 
   return (
@@ -3174,10 +3826,16 @@ function InvestorContactsPage() {
           copy="This lightweight CRM is a Premium Preview. It helps you keep deal sources, finance contacts and delivery partners connected to the opportunities you are analysing."
         />
       </section>
+      {(cloudLoading || cloudError) && (
+        <section className="cloud-status-row">
+          {cloudLoading && <p className="status-message">Loading cloud contacts...</p>}
+          {cloudError && <p className="status-message error">{cloudError}</p>}
+        </section>
+      )}
 
       <section className="workspace-layout">
         <div className="panel">
-          <PanelHeading label="Add contact" title="Relationship Details" meta="Premium" />
+          <PanelHeading label="Add contact" title="Relationship Details" meta={cloudWorkspace ? 'Cloud' : 'Premium'} />
           <label className="note-entry"><span>Name</span><input value={form.name} onChange={(event) => updateForm('name', event.target.value)} placeholder="Jane Smith" /></label>
           <label className="note-entry"><span>Role</span><select className="stage-select" value={form.role} onChange={(event) => updateForm('role', event.target.value)}><option>Agent</option><option>Broker</option><option>Sourcer</option><option>Lender</option><option>Solicitor</option><option>Builder</option><option>JV Partner</option></select></label>
           <label className="note-entry"><span>Email</span><input value={form.email} onChange={(event) => updateForm('email', event.target.value)} placeholder="name@example.com" /></label>
@@ -3219,6 +3877,8 @@ function InvestorContactsPage() {
 }
 
 function PipelinePage() {
+  const { user } = useAuth();
+  const cloudWorkspace = hasCloudWorkspace(user);
   const stages = ['Lead', 'Analysing', 'Offered', 'Under Offer', 'Purchased'];
   const stageDescriptions = {
     Lead: 'New opportunities identified.',
@@ -3229,6 +3889,38 @@ function PipelinePage() {
   };
   const [pipelineDeals, setPipelineDeals] = useState(loadPipelineDeals);
   const [form, setForm] = useState({ title: '', askingPrice: '', source: '', notes: '' });
+  const [cloudLoading, setCloudLoading] = useState(false);
+  const [cloudError, setCloudError] = useState('');
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadPipeline() {
+      if (!cloudWorkspace) {
+        setPipelineDeals(loadPipelineDeals());
+        setCloudError('');
+        setCloudLoading(false);
+        return;
+      }
+
+      setCloudLoading(true);
+      setCloudError('');
+      try {
+        const rows = await fetchCloudRows('pipeline_items', fromPipelineRow);
+        if (mounted) setPipelineDeals(rows);
+      } catch (error) {
+        if (mounted) setCloudError(error.message || 'Could not load pipeline items.');
+      } finally {
+        if (mounted) setCloudLoading(false);
+      }
+    }
+
+    loadPipeline();
+
+    return () => {
+      mounted = false;
+    };
+  }, [cloudWorkspace, user?.id]);
 
   function updateForm(name, value) {
     setForm((current) => ({ ...current, [name]: value }));
@@ -3239,43 +3931,72 @@ function PipelinePage() {
     savePipelineDeals(nextDeals);
   }
 
-  function addPipelineDeal() {
+  async function addPipelineDeal() {
     const cleanTitle = form.title.trim();
     if (!cleanTitle) return;
     const now = new Date().toISOString();
-    savePipeline([
-      {
-        id: crypto.randomUUID(),
-        title: cleanTitle,
-        askingPrice: toNumber(form.askingPrice),
-        source: form.source.trim(),
-        notes: form.notes.trim(),
-        stage: 'Lead',
-        strategy: 'Manual',
-        dateAdded: now,
-        updatedAt: now,
-      },
-      ...pipelineDeals,
-    ]);
-    setForm({ title: '', askingPrice: '', source: '', notes: '' });
+    const pipelineItem = {
+      id: crypto.randomUUID(),
+      title: cleanTitle,
+      askingPrice: toNumber(form.askingPrice),
+      source: form.source.trim(),
+      notes: form.notes.trim(),
+      stage: 'Lead',
+      strategy: 'Manual',
+      dateAdded: now,
+      updatedAt: now,
+    };
+    try {
+      if (cloudWorkspace) {
+        const savedItem = await insertCloudRow('pipeline_items', toPipelineRow(user.id, pipelineItem), fromPipelineRow);
+        setPipelineDeals((currentDeals) => [savedItem, ...currentDeals]);
+      } else {
+        savePipeline([pipelineItem, ...pipelineDeals]);
+      }
+      setForm({ title: '', askingPrice: '', source: '', notes: '' });
+    } catch (error) {
+      setCloudError(error.message || 'Could not save this pipeline item.');
+    }
   }
 
-  function updateStage(dealId, stage) {
-    savePipeline(pipelineDeals.map((deal) => (deal.id === dealId ? { ...deal, stage, updatedAt: new Date().toISOString() } : deal)));
+  async function updateStage(dealId, stage) {
+    try {
+      if (cloudWorkspace) {
+        const updatedDeal = await updateCloudRow('pipeline_items', dealId, { stage }, fromPipelineRow);
+        setPipelineDeals((currentDeals) => currentDeals.map((deal) => (deal.id === dealId ? updatedDeal : deal)));
+      } else {
+        savePipeline(pipelineDeals.map((deal) => (deal.id === dealId ? { ...deal, stage, updatedAt: new Date().toISOString() } : deal)));
+      }
+    } catch (error) {
+      setCloudError(error.message || 'Could not update this stage.');
+    }
   }
 
-  function deletePipelineDeal(dealId) {
-    savePipeline(pipelineDeals.filter((deal) => deal.id !== dealId));
+  async function deletePipelineDeal(dealId) {
+    try {
+      if (cloudWorkspace) await deleteCloudRow('pipeline_items', dealId);
+      const nextDeals = pipelineDeals.filter((deal) => deal.id !== dealId);
+      setPipelineDeals(nextDeals);
+      if (!cloudWorkspace) savePipelineDeals(nextDeals);
+    } catch (error) {
+      setCloudError(error.message || 'Could not delete this pipeline item.');
+    }
   }
 
-  function movePipelineDealToPortfolio(deal) {
-    addDealToPortfolio({
+  async function movePipelineDealToPortfolio(deal) {
+    const propertyDeal = {
       id: deal.sourceDealId || deal.id,
       name: deal.title,
       metrics: { refinanceLoan: 0 },
       inputs: { purchasePrice: deal.askingPrice },
-    });
-    updateStage(deal.id, 'Purchased');
+    };
+    try {
+      if (cloudWorkspace) await addDealToCloudPortfolio(user, propertyDeal);
+      else addDealToPortfolio(propertyDeal);
+      await updateStage(deal.id, 'Purchased');
+    } catch (error) {
+      setCloudError(error.message || 'Could not move this deal to portfolio.');
+    }
   }
 
   const pipelineSummary = pipelineDeals.reduce(
@@ -3305,6 +4026,12 @@ function PipelinePage() {
         <SummaryCard label="Purchased" value={String(pipelineSummary.purchased)} copy="Completed acquisitions ready for Portfolio." />
         <SummaryCard label="Estimated Pipeline Value" value={formatMoney(pipelineSummary.value)} copy="Total asking price across pipeline records." />
       </section>
+      {(cloudLoading || cloudError) && (
+        <section className="cloud-status-row">
+          {cloudLoading && <p className="status-message">Loading cloud pipeline...</p>}
+          {cloudError && <p className="status-message error">{cloudError}</p>}
+        </section>
+      )}
 
       <section className="upgrade-strip glass-card">
         <div>

@@ -1925,6 +1925,22 @@ p {
   font-weight: 850;
 }
 
+.status-message.error {
+  color: #f2a9a1;
+}
+
+.cloud-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin: -10px 0 18px;
+  padding: 12px 14px;
+  border: 1px solid rgba(245, 241, 232, 0.08);
+  border-radius: 8px;
+  background: rgba(18, 23, 31, 0.56);
+}
+
 .stacked-actions {
   display: grid;
   gap: 10px;
