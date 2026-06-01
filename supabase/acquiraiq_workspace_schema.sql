@@ -81,6 +81,17 @@ create table if not exists public.investor_contacts (
   unique (user_id, local_id)
 );
 
+create table if not exists public.account_profiles (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null unique references auth.users(id) on delete cascade,
+  email text,
+  plan text not null default 'Free' check (plan in ('Free', 'Premium', 'Pro', 'Admin')),
+  stripe_customer_id text,
+  subscription_status text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 drop trigger if exists set_saved_deals_updated_at on public.saved_deals;
 create trigger set_saved_deals_updated_at
 before update on public.saved_deals
@@ -101,10 +112,16 @@ create trigger set_investor_contacts_updated_at
 before update on public.investor_contacts
 for each row execute function public.set_updated_at();
 
+drop trigger if exists set_account_profiles_updated_at on public.account_profiles;
+create trigger set_account_profiles_updated_at
+before update on public.account_profiles
+for each row execute function public.set_updated_at();
+
 alter table public.saved_deals enable row level security;
 alter table public.pipeline_items enable row level security;
 alter table public.portfolio_properties enable row level security;
 alter table public.investor_contacts enable row level security;
+alter table public.account_profiles enable row level security;
 
 drop policy if exists "Users can read their own saved deals" on public.saved_deals;
 create policy "Users can read their own saved deals"
@@ -189,3 +206,25 @@ drop policy if exists "Users can delete their own investor contacts" on public.i
 create policy "Users can delete their own investor contacts"
 on public.investor_contacts for delete
 using (auth.uid() = user_id);
+
+drop policy if exists "Users can read their own account profile" on public.account_profiles;
+create policy "Users can read their own account profile"
+on public.account_profiles for select
+using (auth.uid() = user_id);
+
+drop policy if exists "Users can create their own account profile" on public.account_profiles;
+create policy "Users can create their own account profile"
+on public.account_profiles for insert
+with check (
+  auth.uid() = user_id
+  and (
+    plan = 'Free'
+    or (auth.jwt() ->> 'email' = 'samborth@icloud.com')
+  )
+);
+
+drop policy if exists "Admin developer can update own account profile" on public.account_profiles;
+create policy "Admin developer can update own account profile"
+on public.account_profiles for update
+using (auth.uid() = user_id and auth.jwt() ->> 'email' = 'samborth@icloud.com')
+with check (auth.uid() = user_id and auth.jwt() ->> 'email' = 'samborth@icloud.com');

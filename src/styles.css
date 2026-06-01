@@ -1946,6 +1946,104 @@ p {
   gap: 10px;
 }
 
+.usage-panel {
+  margin: 18px 0;
+  padding: 22px;
+}
+
+.usage-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.usage-card {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid rgba(245, 241, 232, 0.08);
+  border-radius: 8px;
+  background: rgba(245, 241, 232, 0.035);
+}
+
+.usage-card span {
+  color: #9d968b;
+  font-size: 0.76rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.usage-card strong {
+  color: #f5f1e8;
+  font-size: 1.25rem;
+}
+
+.usage-card p {
+  margin: 0;
+  font-size: 0.82rem;
+}
+
+.usage-meter {
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(245, 241, 232, 0.08);
+}
+
+.usage-meter i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #78d8bf, #d1b07a);
+}
+
+.upgrade-modal-backdrop {
+  position: fixed;
+  z-index: 80;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(4, 6, 9, 0.72);
+  backdrop-filter: blur(12px);
+}
+
+.upgrade-modal {
+  width: min(620px, 100%);
+  padding: 26px;
+}
+
+.premium-preview-grid.compact {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 16px;
+}
+
+.feature-link-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.feature-link-grid a {
+  padding: 13px;
+  border: 1px solid rgba(245, 241, 232, 0.09);
+  border-radius: 8px;
+  background: rgba(245, 241, 232, 0.04);
+  color: #f5f1e8;
+  font-size: 0.86rem;
+  font-weight: 850;
+  transition:
+    transform 0.22s ease,
+    background 0.22s ease;
+}
+
+.feature-link-grid a:hover {
+  background: rgba(245, 241, 232, 0.08);
+  transform: translateY(-1px);
+}
+
 .legal-page .trust-section {
   margin-top: 18px;
 }
@@ -2179,6 +2277,8 @@ p {
   .checklist-grid,
   .legal-grid,
   .account-grid,
+  .usage-grid,
+  .feature-link-grid,
   .summary-strip,
   .analyzer-grid {
     grid-template-columns: 1fr;
@@ -2254,6 +2354,7 @@ p {
 
   .module-grid,
   .preview-grid,
+  .premium-preview-grid.compact,
   .saved-metrics,
   .saved-actions,
   .vault-actions,

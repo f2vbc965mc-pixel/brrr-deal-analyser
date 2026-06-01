@@ -22,6 +22,46 @@ const CONTACTS_STORAGE_KEY = 'acquiraiq-investor-contacts';
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || '';
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
 const CLOUD_SYNC_ENABLED = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
+const ADMIN_EMAILS = ['samborth@icloud.com'];
+const PLAN_LIMITS = {
+  Free: {
+    savedDeals: 5,
+    pipelineDeals: 3,
+    portfolioProperties: 1,
+    investorContacts: 10,
+  },
+  Premium: {
+    savedDeals: Infinity,
+    pipelineDeals: Infinity,
+    portfolioProperties: Infinity,
+    investorContacts: Infinity,
+  },
+  Pro: {
+    savedDeals: Infinity,
+    pipelineDeals: Infinity,
+    portfolioProperties: Infinity,
+    investorContacts: Infinity,
+  },
+  Admin: {
+    savedDeals: Infinity,
+    pipelineDeals: Infinity,
+    portfolioProperties: Infinity,
+    investorContacts: Infinity,
+  },
+};
+
+const PLAN_FEATURES = {
+  Free: ['BRRR Analysis', 'SA Analysis', '5 Saved Deals', '3 Pipeline Deals', '1 Portfolio Property', '10 Investor Contacts'],
+  Premium: ['Unlimited Deals', 'Unlimited Pipeline', 'Unlimited Portfolio', 'Unlimited Contacts', 'Deal Comparison', 'PDF Exports', 'Advanced Sensitivity Analysis', 'Scenario Saving', 'Portfolio Dashboard', 'Refinance Forecasting'],
+  Pro: ['Everything in Premium', 'Team Members', 'Shared Deal Vault', 'Shared Pipeline', 'CRM Features', 'Investor Database', 'White-label Reports', 'Acquisition Analytics', 'Team Collaboration Foundation'],
+};
+
+const RESOURCE_LABELS = {
+  savedDeals: 'Saved Deals',
+  pipelineDeals: 'Pipeline Records',
+  portfolioProperties: 'Portfolio Properties',
+  investorContacts: 'Investor Contacts',
+};
 
 const initialInputs = {
   purchasePrice: '180000',
@@ -283,6 +323,40 @@ function hasCloudWorkspace(user) {
   return Boolean(user?.id && supabase);
 }
 
+function isAdminUser(user) {
+  return ADMIN_EMAILS.includes((user?.email || '').toLowerCase());
+}
+
+function normalizePlan(plan) {
+  return ['Free', 'Premium', 'Pro', 'Admin'].includes(plan) ? plan : 'Free';
+}
+
+function getEffectivePlan(user, accountProfile) {
+  if (isAdminUser(user)) return 'Admin';
+  return normalizePlan(accountProfile?.plan);
+}
+
+function getPlanLimit(plan, resource) {
+  return PLAN_LIMITS[normalizePlan(plan)]?.[resource] ?? 0;
+}
+
+function canCreateResource(plan, resource, currentCount) {
+  const limit = getPlanLimit(plan, resource);
+  return limit === Infinity || currentCount < limit;
+}
+
+function formatLimit(limit) {
+  return limit === Infinity ? 'Unlimited' : String(limit);
+}
+
+function getLimitPrompt(resource) {
+  return {
+    resource,
+    title: `${RESOURCE_LABELS[resource]} limit reached`,
+    copy: `Free accounts include ${formatLimit(getPlanLimit('Free', resource))} ${RESOURCE_LABELS[resource].toLowerCase()}. Upgrade to Premium for unlimited workspace capacity and deeper investor tools.`,
+  };
+}
+
 function getLocalId(item) {
   return item.localId || item.local_id || item.id || crypto.randomUUID();
 }
@@ -448,6 +522,71 @@ async function updateCloudRow(table, id, values, mapper) {
 async function deleteCloudRow(table, id) {
   const { error } = await supabase.from(table).delete().eq('id', id);
   if (error) throw error;
+}
+
+async function getResourceCount(user, resource) {
+  if (!hasCloudWorkspace(user)) {
+    if (resource === 'savedDeals') return loadDealVault().filter((item) => item.type === 'Deal').length || loadSavedDeals().length;
+    if (resource === 'pipelineDeals') return loadPipelineDeals().length;
+    if (resource === 'portfolioProperties') return loadPortfolioProperties().length;
+    if (resource === 'investorContacts') return loadInvestorContacts().length;
+    return 0;
+  }
+
+  const table = {
+    savedDeals: 'saved_deals',
+    pipelineDeals: 'pipeline_items',
+    portfolioProperties: 'portfolio_properties',
+    investorContacts: 'investor_contacts',
+  }[resource];
+
+  let query = supabase.from(table).select('id', { count: 'exact', head: true });
+  if (resource === 'savedDeals') query = query.eq('record_type', 'Deal');
+  const { count, error } = await query;
+  if (error) throw error;
+  return count || 0;
+}
+
+async function ensureAccountProfile(user) {
+  if (!hasCloudWorkspace(user)) return null;
+
+  const requestedPlan = isAdminUser(user) ? 'Admin' : 'Free';
+  const existing = await supabase
+    .from('account_profiles')
+    .select('*')
+    .eq('user_id', user.id)
+    .maybeSingle();
+
+  if (existing.error) throw existing.error;
+
+  let data = existing.data;
+
+  if (!data) {
+    const created = await supabase
+      .from('account_profiles')
+      .insert({
+        user_id: user.id,
+        email: user.email,
+        plan: requestedPlan,
+      })
+      .select('*')
+      .single();
+    if (created.error) throw created.error;
+    data = created.data;
+  }
+
+  if (isAdminUser(user) && data.plan !== 'Admin') {
+    const { data: adminData, error: adminError } = await supabase
+      .from('account_profiles')
+      .update({ plan: 'Admin', email: user.email })
+      .eq('user_id', user.id)
+      .select('*')
+      .single();
+    if (adminError) throw adminError;
+    return adminData;
+  }
+
+  return data;
 }
 
 function createPipelineItemFromDeal(deal, stage = 'Lead') {
@@ -672,6 +811,7 @@ function getDashboardStats() {
   const vaultItems = loadDealVault();
   const pipelineDeals = loadPipelineDeals();
   const portfolioProperties = loadPortfolioProperties();
+  const investorContacts = loadInvestorContacts();
   const account = loadAccount();
   const upgradeIntent = loadUpgradeIntent();
   const vaultDealItems = vaultItems.filter((item) => item.type === 'Deal');
@@ -710,6 +850,7 @@ function getDashboardStats() {
     vaultItems: vaultItems.length,
     pipelineDeals: pipelineDeals.length,
     portfolioProperties: portfolioProperties.length,
+    investorContacts: investorContacts.length,
     portfolioTotals,
     bestRoi,
     bestCashflow,
@@ -1360,7 +1501,11 @@ const AuthContext = createContext(null);
 function AuthProvider({ children }) {
   const [session, setSession] = useState(null);
   const [authLoading, setAuthLoading] = useState(Boolean(supabase));
+  const [accountProfile, setAccountProfile] = useState(null);
+  const [planLoading, setPlanLoading] = useState(false);
+  const [planError, setPlanError] = useState('');
   const user = getCurrentUserFromSession(session);
+  const plan = getEffectivePlan(user, accountProfile);
 
   useEffect(() => {
     let mounted = true;
@@ -1393,6 +1538,39 @@ function AuthProvider({ children }) {
     };
   }, []);
 
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadPlan() {
+      if (!user) {
+        setAccountProfile(null);
+        setPlanError('');
+        setPlanLoading(false);
+        return;
+      }
+
+      setPlanLoading(true);
+      setPlanError('');
+      try {
+        const profile = await ensureAccountProfile(user);
+        if (mounted) setAccountProfile(profile);
+      } catch (error) {
+        if (mounted) {
+          setAccountProfile(null);
+          setPlanError(error.message || 'Could not load account plan.');
+        }
+      } finally {
+        if (mounted) setPlanLoading(false);
+      }
+    }
+
+    loadPlan();
+
+    return () => {
+      mounted = false;
+    };
+  }, [user?.id, user?.email]);
+
   async function signUp(email, password) {
     const data = await signUpWithEmail(email, password);
     if (data.session) setSession(data.session);
@@ -1408,10 +1586,11 @@ function AuthProvider({ children }) {
   async function signOut() {
     await signOutSession();
     setSession(null);
+    setAccountProfile(null);
   }
 
   return (
-    <AuthContext.Provider value={{ session, user, authLoading, signUp, signIn, signOut }}>
+    <AuthContext.Provider value={{ session, user, authLoading, accountProfile, plan, planLoading, planError, signUp, signIn, signOut }}>
       {children}
     </AuthContext.Provider>
   );
@@ -1447,6 +1626,16 @@ function App() {
           <Route path="not-financial-advice" element={<NotFinancialAdvicePage />} />
           <Route path="professional-tools" element={<ProfessionalToolsPage />} />
           <Route path="operating-system" element={<OperatingSystemPage />} />
+          <Route path="deal-comparison" element={<FeatureFoundationPage type="comparison" />} />
+          <Route path="scenario-manager" element={<FeatureFoundationPage type="scenarios" />} />
+          <Route path="pdf-reports" element={<FeatureFoundationPage type="reports" />} />
+          <Route path="portfolio-analytics" element={<FeatureFoundationPage type="portfolioAnalytics" />} />
+          <Route path="refinancing-forecasts" element={<FeatureFoundationPage type="refinancing" />} />
+          <Route path="team-management" element={<FeatureFoundationPage type="team" />} />
+          <Route path="shared-workspace" element={<FeatureFoundationPage type="sharedWorkspace" />} />
+          <Route path="investor-database" element={<FeatureFoundationPage type="investorDatabase" />} />
+          <Route path="white-label-reporting" element={<FeatureFoundationPage type="whiteLabel" />} />
+          <Route path="acquisition-analytics" element={<FeatureFoundationPage type="acquisitionAnalytics" />} />
           <Route path="portfolio" element={<PortfolioPage />} />
           <Route path="roadmap" element={<RoadmapPage />} />
           <Route path="*" element={<NotFoundPage />} />
@@ -1468,7 +1657,7 @@ function ScrollToTop() {
 
 function Shell() {
   const [menuOpen, setMenuOpen] = useState(false);
-  const { user, signOut } = useAuth();
+  const { user, plan, signOut } = useAuth();
 
   async function handleLogOut() {
     await signOut();
@@ -1510,6 +1699,9 @@ function Shell() {
           </NavLink>
           {user ? (
             <>
+              <Link to="/account" onClick={() => setMenuOpen(false)}>
+                {plan}
+              </Link>
               <span className="nav-user">{user.email}</span>
               <button className="nav-logout" type="button" onClick={handleLogOut}>
                 Log Out
@@ -1817,7 +2009,7 @@ function AuthLayout({ label, title, copy, children }) {
 }
 
 function DashboardPage() {
-  const { user } = useAuth();
+  const { user, plan, planError } = useAuth();
   const cloudWorkspace = hasCloudWorkspace(user);
   const [stats, setStats] = useState(getDashboardStats);
   const [syncStatus, setSyncStatus] = useState(stats.syncStatus);
@@ -1915,6 +2107,7 @@ function DashboardPage() {
           <p>{cloudWorkspace ? 'Track the evidence, opportunities and owned assets saved to your signed-in account.' : 'Track the evidence, opportunities and owned assets stored locally in this browser.'}</p>
           {cloudLoading && <p className="status-message">Loading cloud workspace...</p>}
           {cloudError && <p className="status-message error">{cloudError}</p>}
+          {planError && <p className="status-message error">{planError}</p>}
         </div>
         <div className="dashboard-summary">
           <SummaryCard label="Deals Analysed" value={String(stats.dealsAnalysed)} copy="Saved underwriting records." />
@@ -1923,7 +2116,17 @@ function DashboardPage() {
           <SummaryCard label="Portfolio Properties" value={String(stats.portfolioProperties)} copy="Tracked owned assets." />
           <SummaryCard label="Monthly Rental Income" value={formatMoney(stats.portfolioTotals.rent)} copy="Gross rent from portfolio records." />
           <SummaryCard label="Estimated Portfolio Equity" value={formatMoney(stats.portfolioTotals.equity)} copy="Value less mortgage balances." />
+          <SummaryCard label="Plan Status" value={plan} copy={plan === 'Admin' ? 'Development access with all limits bypassed.' : 'Current workspace access level.'} />
         </div>
+      </section>
+
+      <section className="usage-panel glass-card">
+        <SectionHeading
+          label="Usage limits"
+          title="Workspace capacity"
+          copy={plan === 'Free' ? 'Free accounts include enough capacity to test the full investor workflow before upgrading.' : 'Your current plan has unlimited workspace capacity for active investor workflows.'}
+        />
+        <UsageGrid plan={plan} stats={stats} />
       </section>
 
       <section className="onboarding-panel glass-card">
@@ -2023,8 +2226,8 @@ function DashboardPage() {
       <section className="upgrade-strip glass-card">
         <div>
           <p className="eyebrow">Platform</p>
-          <h2>Free analysis today. Pro and Premium workflows next.</h2>
-          <p>AcquiraIQ is structured around a Free / Pro / Premium ecosystem without blocking the core analyzers.</p>
+          <h2>{plan === 'Free' ? 'Upgrade when your workspace grows' : `${plan} workspace active`}</h2>
+          <p>{plan === 'Free' ? 'Premium unlocks unlimited saved deals, pipeline, portfolio and contacts plus deeper decision support.' : 'Your account is ready for deeper workflow testing across the investor platform.'}</p>
         </div>
         <div className="hero-actions">
           <Link className="primary-link" to="/platform">View Platform</Link>
@@ -2036,7 +2239,7 @@ function DashboardPage() {
 }
 
 function BrrrAnalyzerPage() {
-  const { user } = useAuth();
+  const { user, plan } = useAuth();
   const cloudWorkspace = hasCloudWorkspace(user);
   const [inputs, setInputs] = useState(initialInputs);
   const [scenario, setScenario] = useState('expected');
@@ -2050,6 +2253,7 @@ function BrrrAnalyzerPage() {
   const [saveMessage, setSaveMessage] = useState('');
   const [cloudLoading, setCloudLoading] = useState(false);
   const [cloudError, setCloudError] = useState('');
+  const [upgradePrompt, setUpgradePrompt] = useState(null);
 
   useEffect(() => {
     let mounted = true;
@@ -2233,6 +2437,10 @@ function BrrrAnalyzerPage() {
       setSaveMessage('Sign in to save this opportunity.');
       return;
     }
+    if (!canCreateResource(plan, 'savedDeals', savedDeals.length)) {
+      setUpgradePrompt(getLimitPrompt('savedDeals'));
+      return;
+    }
     const cleanName = dealName.trim() || createDefaultDealName(inputs, 'BRRR');
     const deal = {
       id: crypto.randomUUID(),
@@ -2370,6 +2578,11 @@ function BrrrAnalyzerPage() {
 
   async function moveSavedDealToPipeline(deal) {
     try {
+      const currentCount = await getResourceCount(user, 'pipelineDeals');
+      if (!canCreateResource(plan, 'pipelineDeals', currentCount)) {
+        setUpgradePrompt(getLimitPrompt('pipelineDeals'));
+        return;
+      }
       if (cloudWorkspace) await addDealToCloudPipeline(user, deal, 'Analysing');
       else addDealToPipeline(deal, 'Analysing');
       setSaveMessage(`${deal.name} moved to pipeline`);
@@ -2380,6 +2593,11 @@ function BrrrAnalyzerPage() {
 
   async function moveSavedDealToPortfolio(deal) {
     try {
+      const currentCount = await getResourceCount(user, 'portfolioProperties');
+      if (!canCreateResource(plan, 'portfolioProperties', currentCount)) {
+        setUpgradePrompt(getLimitPrompt('portfolioProperties'));
+        return;
+      }
       if (cloudWorkspace) await addDealToCloudPortfolio(user, deal);
       else addDealToPortfolio(deal);
       setSaveMessage(`${deal.name} added to portfolio`);
@@ -2418,6 +2636,7 @@ function BrrrAnalyzerPage() {
 
   return (
     <main className="page analyzer-page">
+      {upgradePrompt && <UpgradeModal prompt={upgradePrompt} onClose={() => setUpgradePrompt(null)} />}
       <section className="module-header">
         <div>
           <p className="eyebrow">Analysis</p>
@@ -2558,7 +2777,7 @@ function BrrrAnalyzerPage() {
 }
 
 function AirbnbAnalyzerPage() {
-  const { user } = useAuth();
+  const { user, plan } = useAuth();
   const cloudWorkspace = hasCloudWorkspace(user);
   const [inputs, setInputs] = useState(initialAirbnbInputs);
   const [scenario, setScenario] = useState('expected');
@@ -2571,6 +2790,7 @@ function AirbnbAnalyzerPage() {
   const [saveMessage, setSaveMessage] = useState('');
   const [cloudLoading, setCloudLoading] = useState(false);
   const [cloudError, setCloudError] = useState('');
+  const [upgradePrompt, setUpgradePrompt] = useState(null);
 
   useEffect(() => {
     let mounted = true;
@@ -2749,6 +2969,11 @@ function AirbnbAnalyzerPage() {
       setSaveMessage('Sign in to save this opportunity.');
       return;
     }
+    const savedDealCount = vaultItems.filter((item) => item.type === 'Deal').length;
+    if (!canCreateResource(plan, 'savedDeals', savedDealCount)) {
+      setUpgradePrompt(getLimitPrompt('savedDeals'));
+      return;
+    }
     const cleanName = dealName.trim() || createDefaultDealName({ purchasePrice: inputs.purchasePrice }, 'SA');
     const item = {
       id: crypto.randomUUID(),
@@ -2818,6 +3043,7 @@ function AirbnbAnalyzerPage() {
 
   return (
     <main className="page analyzer-page">
+      {upgradePrompt && <UpgradeModal prompt={upgradePrompt} onClose={() => setUpgradePrompt(null)} />}
       <section className="module-header">
         <div>
           <p className="eyebrow">Analysis</p>
@@ -3012,7 +3238,8 @@ function PlatformPage() {
         </div>
         <div className="conversion-actions">
           <Link className="primary-link" to="/pricing">Upgrade to Pro</Link>
-          <Link className="secondary-link" to="/brrr">Analyse Deal</Link>
+          <Link className="secondary-link" to="/deal-comparison">Deal Comparison</Link>
+          <Link className="secondary-link" to="/pdf-reports">PDF Reports</Link>
         </div>
       </section>
 
@@ -3035,6 +3262,27 @@ function PlatformPage() {
         <div className="conversion-actions">
           <Link className="primary-link" to="/pricing">Unlock Premium</Link>
           <Link className="secondary-link" to="/portfolio">Open Portfolio</Link>
+          <Link className="secondary-link" to="/portfolio-analytics">Portfolio Analytics</Link>
+        </div>
+      </section>
+
+      <section className="platform-section glass-card">
+        <SectionHeading
+          label="Subscription foundations"
+          title="Paid feature architecture"
+          copy="These routes establish the product surface area for Premium and Pro before payments, permissions and complex collaboration logic are connected."
+        />
+        <div className="feature-link-grid">
+          <Link to="/deal-comparison">Deal Comparison</Link>
+          <Link to="/scenario-manager">Scenario Manager</Link>
+          <Link to="/pdf-reports">PDF Reports</Link>
+          <Link to="/portfolio-analytics">Portfolio Analytics</Link>
+          <Link to="/refinancing-forecasts">Refinancing Forecasts</Link>
+          <Link to="/team-management">Team Management</Link>
+          <Link to="/shared-workspace">Shared Workspace</Link>
+          <Link to="/investor-database">Investor Database</Link>
+          <Link to="/white-label-reporting">White-label Reporting</Link>
+          <Link to="/acquisition-analytics">Acquisition Analytics</Link>
         </div>
       </section>
 
@@ -3064,23 +3312,23 @@ function PricingPage() {
     {
       name: 'Free',
       price: '£0',
-      badge: 'Current',
-      copy: 'For testing the core underwriting workflow.',
-      items: ['BRRR Analyzer', 'SA Analyzer', 'Local saved deals', 'Basic Deal Vault'],
-    },
-    {
-      name: 'Pro',
-      price: '£12/mo',
-      badge: 'Recommended',
-      copy: 'For investors who want faster analysis, clearer risks and better decision records.',
-      items: ['Advanced Investor Verdict', 'Scenario Testing', 'Advanced Sensitivity Analysis', 'Strategy Comparison', 'PDF Investment Reports', 'Unlimited Saved Deals'],
+      badge: 'Start',
+      copy: 'For testing the core underwriting workflow before committing to a paid workspace.',
+      items: PLAN_FEATURES.Free,
     },
     {
       name: 'Premium',
-      price: '£29/mo',
-      badge: 'Future',
-      copy: 'For portfolio builders who want a full operating system around acquisitions and assets.',
-      items: ['Portfolio Tracking', 'Deal Pipeline', 'Growth Forecasting', 'Investor CRM', 'Marketplace Access', 'Team Features', 'Advanced Reporting'],
+      price: '£19/mo',
+      badge: 'Recommended',
+      copy: 'For active investors who want unlimited workspace capacity and stronger decision records.',
+      items: PLAN_FEATURES.Premium,
+    },
+    {
+      name: 'Pro',
+      price: '£49/mo',
+      badge: 'Teams',
+      copy: 'For professional investors, sourcing teams and future shared workspaces.',
+      items: PLAN_FEATURES.Pro,
     },
   ];
 
@@ -3107,12 +3355,12 @@ function PricingPage() {
       <section className="page-hero compact">
         <p className="eyebrow">Pricing</p>
         <h1>Simple pricing for serious deal analysis</h1>
-        <p>Payment processing is intentionally not connected yet. This page validates upgrade demand and provides a clean Stripe-ready pricing structure.</p>
+        <p>Free, Premium and Pro are structured for Stripe later. Payments are not active yet, but the product now uses plan limits and account tiers.</p>
       </section>
 
       <section className="pricing-grid">
         {plans.map((plan) => (
-          <article className={plan.name === 'Pro' ? 'pricing-card featured glass-card' : 'pricing-card glass-card'} key={plan.name}>
+          <article className={plan.name === 'Premium' ? 'pricing-card featured glass-card' : 'pricing-card glass-card'} key={plan.name}>
             <span>{plan.badge}</span>
             <h2>{plan.name}</h2>
             <strong>{plan.price}</strong>
@@ -3120,8 +3368,8 @@ function PricingPage() {
             <ul>
               {plan.items.map((item) => <li key={item}>{item}</li>)}
             </ul>
-            <button className={plan.name === 'Pro' ? 'primary-btn' : 'secondary-btn'} type="button" onClick={() => choosePlan(plan)}>
-              {plan.name === 'Free' ? 'Start Free' : plan.name === 'Pro' ? 'Upgrade to Pro' : 'Unlock Premium'}
+            <button className={plan.name === 'Premium' ? 'primary-btn' : 'secondary-btn'} type="button" onClick={() => choosePlan(plan)}>
+              {plan.name === 'Free' ? 'Start Free' : plan.name === 'Premium' ? 'Upgrade to Premium' : 'Upgrade to Pro'}
             </button>
           </article>
         ))}
@@ -3133,8 +3381,8 @@ function PricingPage() {
           <h2>{upgradeIntent ? `${upgradeIntent.plan} interest saved` : 'Ready for Stripe Checkout next'}</h2>
           <p>
             {upgradeIntent
-              ? `Your upgrade preference is saved locally. The next implementation step is connecting this plan to Stripe Checkout and webhook-managed subscription status.`
-              : 'The pricing structure is live in the product. Backend auth, Stripe Checkout and subscription webhooks should be connected before charging users.'}
+              ? `Your ${upgradeIntent.plan} preference is saved locally. Stripe Checkout can later map this plan to account_profiles.plan.`
+              : 'The plan architecture is live in the product. Stripe Checkout and webhooks can be connected next without changing the workspace model.'}
           </p>
         </div>
         <Link className="primary-link" to="/dashboard">Back to Dashboard</Link>
@@ -3144,12 +3392,13 @@ function PricingPage() {
 }
 
 function VaultPage() {
-  const { user } = useAuth();
+  const { user, plan } = useAuth();
   const cloudWorkspace = hasCloudWorkspace(user);
   const [vaultItems, setVaultItems] = useState(loadDealVault);
   const [message, setMessage] = useState('');
   const [cloudLoading, setCloudLoading] = useState(false);
   const [cloudError, setCloudError] = useState('');
+  const [upgradePrompt, setUpgradePrompt] = useState(null);
 
   useEffect(() => {
     let mounted = true;
@@ -3203,6 +3452,11 @@ function VaultPage() {
 
   async function moveVaultItemToPipeline(item) {
     try {
+      const currentCount = await getResourceCount(user, 'pipelineDeals');
+      if (!canCreateResource(plan, 'pipelineDeals', currentCount)) {
+        setUpgradePrompt(getLimitPrompt('pipelineDeals'));
+        return;
+      }
       if (cloudWorkspace) await addDealToCloudPipeline(user, item, 'Analysing');
       else addDealToPipeline(item, 'Analysing');
       setMessage(`${item.title} moved to pipeline`);
@@ -3213,6 +3467,11 @@ function VaultPage() {
 
   async function moveVaultItemToPortfolio(item) {
     try {
+      const currentCount = await getResourceCount(user, 'portfolioProperties');
+      if (!canCreateResource(plan, 'portfolioProperties', currentCount)) {
+        setUpgradePrompt(getLimitPrompt('portfolioProperties'));
+        return;
+      }
       if (cloudWorkspace) await addDealToCloudPortfolio(user, item);
       else addDealToPortfolio(item);
       setMessage(`${item.title} added to portfolio`);
@@ -3223,6 +3482,7 @@ function VaultPage() {
 
   return (
     <main className="page vault-page">
+      {upgradePrompt && <UpgradeModal prompt={upgradePrompt} onClose={() => setUpgradePrompt(null)} />}
       <section className="page-hero compact">
         <p className="eyebrow">Deal Vault</p>
         <h1>Your investment evidence</h1>
@@ -3274,12 +3534,32 @@ function VaultPage() {
 }
 
 function AccountPage() {
-  const { user } = useAuth();
+  const { user, plan, planLoading, planError } = useAuth();
   const [account, setAccount] = useState(loadAccount);
   const [email, setEmail] = useState(account?.email || '');
   const [name, setName] = useState(account?.name || '');
   const [message, setMessage] = useState('');
   const [migrating, setMigrating] = useState(false);
+  const [accountStats, setAccountStats] = useState(getDashboardStats);
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadAccountStats() {
+      try {
+        const nextStats = hasCloudWorkspace(user) ? await getCloudDashboardStats() : getDashboardStats();
+        if (mounted) setAccountStats(nextStats);
+      } catch {
+        if (mounted) setAccountStats(getDashboardStats());
+      }
+    }
+
+    loadAccountStats();
+
+    return () => {
+      mounted = false;
+    };
+  }, [user?.id]);
 
   function saveProfile() {
     const nextAccount = {
@@ -3340,6 +3620,15 @@ function clearLocalWorkspace() {
 
       <section className="account-grid">
         <div className="panel">
+          <PanelHeading label="Subscription" title="Plan and Usage" meta={planLoading ? 'Loading' : plan} />
+          {planError && <p className="status-message error">{planError}</p>}
+          <UsageGrid plan={plan} stats={accountStats} />
+          <div className="stacked-actions">
+            <Link className="primary-link" to="/pricing">View Upgrade Options</Link>
+          </div>
+        </div>
+
+        <div className="panel">
           <PanelHeading label="Profile" title="Local Account" meta={account?.plan || 'Free'} />
           <label className="note-entry">
             <span>Name</span>
@@ -3380,6 +3669,113 @@ function clearLocalWorkspace() {
           <div className="stacked-actions">
             <button className="secondary-btn" type="button" onClick={exportWorkspace}>Export Workspace</button>
             <button className="danger-btn" type="button" onClick={clearLocalWorkspace}>Clear Local Workspace</button>
+          </div>
+        </div>
+      </section>
+    </main>
+  );
+}
+
+const FEATURE_FOUNDATIONS = {
+  comparison: {
+    label: 'Premium foundation',
+    title: 'Deal Comparison',
+    copy: 'Compare saved opportunities side by side using cashflow, yield, return, capital left and risk.',
+    tier: 'Premium',
+    rows: ['Deal A', 'Deal B', 'Recommended option', 'Risk-adjusted notes'],
+  },
+  scenarios: {
+    label: 'Premium foundation',
+    title: 'Scenario Manager',
+    copy: 'Organise conservative, expected and optimistic cases for each opportunity.',
+    tier: 'Premium',
+    rows: ['Base case', 'Stress case', 'Upside case', 'Saved assumptions'],
+  },
+  reports: {
+    label: 'Premium foundation',
+    title: 'PDF Reports',
+    copy: 'Generate clean investment reports for internal review, lenders, brokers or partners.',
+    tier: 'Premium',
+    rows: ['Deal summary', 'Investor verdict', 'Core metrics', 'Assumptions and disclaimer'],
+  },
+  portfolioAnalytics: {
+    label: 'Premium foundation',
+    title: 'Portfolio Analytics',
+    copy: 'Track portfolio value, equity, rent, growth and concentration as the workspace expands.',
+    tier: 'Premium',
+    rows: ['Portfolio value', 'Monthly rent', 'Estimated equity', 'Growth forecast'],
+  },
+  refinancing: {
+    label: 'Premium foundation',
+    title: 'Refinancing Forecasts',
+    copy: 'Prepare future refinancing views around valuation, LTV, rate changes and capital recovery.',
+    tier: 'Premium',
+    rows: ['Refinance value', 'Loan estimate', 'Cash left', 'Rate sensitivity'],
+  },
+  team: {
+    label: 'Pro foundation',
+    title: 'Team Management',
+    copy: 'A future workspace layer for inviting team members and assigning access levels.',
+    tier: 'Pro',
+    rows: ['Owner', 'Analyst', 'Viewer', 'Future permissions'],
+  },
+  sharedWorkspace: {
+    label: 'Pro foundation',
+    title: 'Shared Workspace',
+    copy: 'Centralise shared deal vaults, pipelines and team records for professional investors.',
+    tier: 'Pro',
+    rows: ['Shared Deal Vault', 'Shared Pipeline', 'Shared reports', 'Team notes'],
+  },
+  investorDatabase: {
+    label: 'Pro foundation',
+    title: 'Investor Database',
+    copy: 'Structure investor, partner and professional network records beyond the basic CRM preview.',
+    tier: 'Pro',
+    rows: ['Investor profile', 'Source relationship', 'Capital notes', 'Follow-up stage'],
+  },
+  whiteLabel: {
+    label: 'Pro foundation',
+    title: 'White-label Reporting',
+    copy: 'Prepare branded report templates for professional users and future agency workflows.',
+    tier: 'Pro',
+    rows: ['Brand logo', 'Report theme', 'Disclaimer', 'Export settings'],
+  },
+  acquisitionAnalytics: {
+    label: 'Pro foundation',
+    title: 'Acquisition Analytics',
+    copy: 'Analyse lead sources, offer conversion, pipeline value and purchased outcomes over time.',
+    tier: 'Pro',
+    rows: ['Lead source', 'Offer conversion', 'Pipeline value', 'Acquisition velocity'],
+  },
+};
+
+function FeatureFoundationPage({ type }) {
+  const feature = FEATURE_FOUNDATIONS[type] || FEATURE_FOUNDATIONS.comparison;
+  return (
+    <main className="page roadmap-page">
+      <section className="page-hero compact">
+        <p className="eyebrow">{feature.label}</p>
+        <h1>{feature.title}</h1>
+        <p>{feature.copy}</p>
+        <Breadcrumbs items={['Platform', feature.title]} />
+      </section>
+
+      <section className="workspace-layout">
+        <div className="panel">
+          <PanelHeading label={feature.tier} title="Feature foundation" meta="Stripe-ready" />
+          <p>This page establishes the product structure and navigation for the paid feature. Complex billing, collaboration and automation logic can be connected later without changing the route.</p>
+          <Link className="primary-link" to="/pricing">View Plan</Link>
+        </div>
+        <div className="panel">
+          <PanelHeading label="Preview" title="Workflow structure" meta="Planned" />
+          <div className="vault-list">
+            {feature.rows.map((row) => (
+              <article className="vault-record" key={row}>
+                <span>{feature.tier}</span>
+                <strong>{row}</strong>
+                <p>Prepared foundation for future live data and subscription access.</p>
+              </article>
+            ))}
           </div>
         </div>
       </section>
@@ -3549,7 +3945,7 @@ function OperatingSystemPage() {
 }
 
 function PortfolioPage() {
-  const { user } = useAuth();
+  const { user, plan } = useAuth();
   const cloudWorkspace = hasCloudWorkspace(user);
   const [properties, setProperties] = useState(loadPortfolioProperties);
   const [forecast, setForecast] = useState({ years: '5', valueGrowth: '3', rentGrowth: '2' });
@@ -3562,6 +3958,7 @@ function PortfolioPage() {
   });
   const [cloudLoading, setCloudLoading] = useState(false);
   const [cloudError, setCloudError] = useState('');
+  const [upgradePrompt, setUpgradePrompt] = useState(null);
 
   useEffect(() => {
     let mounted = true;
@@ -3605,6 +4002,10 @@ function PortfolioPage() {
   async function addProperty() {
     const propertyName = form.name.trim();
     if (!propertyName) return;
+    if (!canCreateResource(plan, 'portfolioProperties', properties.length)) {
+      setUpgradePrompt(getLimitPrompt('portfolioProperties'));
+      return;
+    }
     const property = {
       id: crypto.randomUUID(),
       name: propertyName,
@@ -3655,6 +4056,7 @@ function PortfolioPage() {
 
   return (
     <main className="page portfolio-page">
+      {upgradePrompt && <UpgradeModal prompt={upgradePrompt} onClose={() => setUpgradePrompt(null)} />}
       <section className="page-hero compact">
         <p className="eyebrow">Portfolio</p>
         <h1>Portfolio Tracker</h1>
@@ -3737,12 +4139,13 @@ function PortfolioPage() {
 }
 
 function InvestorContactsPage() {
-  const { user } = useAuth();
+  const { user, plan } = useAuth();
   const cloudWorkspace = hasCloudWorkspace(user);
   const [contacts, setContacts] = useState(loadInvestorContacts);
   const [form, setForm] = useState({ name: '', role: 'Agent', email: '', phone: '', notes: '' });
   const [cloudLoading, setCloudLoading] = useState(false);
   const [cloudError, setCloudError] = useState('');
+  const [upgradePrompt, setUpgradePrompt] = useState(null);
 
   useEffect(() => {
     let mounted = true;
@@ -3785,6 +4188,10 @@ function InvestorContactsPage() {
 
   async function addContact() {
     if (!form.name.trim()) return;
+    if (!canCreateResource(plan, 'investorContacts', contacts.length)) {
+      setUpgradePrompt(getLimitPrompt('investorContacts'));
+      return;
+    }
     const contact = { ...form, id: crypto.randomUUID(), createdAt: new Date().toISOString() };
     try {
       if (cloudWorkspace) {
@@ -3812,6 +4219,7 @@ function InvestorContactsPage() {
 
   return (
     <main className="page contacts-page">
+      {upgradePrompt && <UpgradeModal prompt={upgradePrompt} onClose={() => setUpgradePrompt(null)} />}
       <section className="page-hero compact">
         <p className="eyebrow">Relationships</p>
         <h1>Investor Contacts</h1>
@@ -3877,7 +4285,7 @@ function InvestorContactsPage() {
 }
 
 function PipelinePage() {
-  const { user } = useAuth();
+  const { user, plan } = useAuth();
   const cloudWorkspace = hasCloudWorkspace(user);
   const stages = ['Lead', 'Analysing', 'Offered', 'Under Offer', 'Purchased'];
   const stageDescriptions = {
@@ -3891,6 +4299,7 @@ function PipelinePage() {
   const [form, setForm] = useState({ title: '', askingPrice: '', source: '', notes: '' });
   const [cloudLoading, setCloudLoading] = useState(false);
   const [cloudError, setCloudError] = useState('');
+  const [upgradePrompt, setUpgradePrompt] = useState(null);
 
   useEffect(() => {
     let mounted = true;
@@ -3934,6 +4343,10 @@ function PipelinePage() {
   async function addPipelineDeal() {
     const cleanTitle = form.title.trim();
     if (!cleanTitle) return;
+    if (!canCreateResource(plan, 'pipelineDeals', pipelineDeals.length)) {
+      setUpgradePrompt(getLimitPrompt('pipelineDeals'));
+      return;
+    }
     const now = new Date().toISOString();
     const pipelineItem = {
       id: crypto.randomUUID(),
@@ -3991,6 +4404,11 @@ function PipelinePage() {
       inputs: { purchasePrice: deal.askingPrice },
     };
     try {
+      const currentCount = await getResourceCount(user, 'portfolioProperties');
+      if (!canCreateResource(plan, 'portfolioProperties', currentCount)) {
+        setUpgradePrompt(getLimitPrompt('portfolioProperties'));
+        return;
+      }
       if (cloudWorkspace) await addDealToCloudPortfolio(user, propertyDeal);
       else addDealToPortfolio(propertyDeal);
       await updateStage(deal.id, 'Purchased');
@@ -4012,6 +4430,7 @@ function PipelinePage() {
 
   return (
     <main className="page pipeline-page">
+      {upgradePrompt && <UpgradeModal prompt={upgradePrompt} onClose={() => setUpgradePrompt(null)} />}
       <section className="page-hero compact">
         <p className="eyebrow">Acquisition Workflow</p>
         <h1>Deal Pipeline</h1>
@@ -4757,6 +5176,55 @@ function SummaryCard({ label, value, copy }) {
       <span>{label}</span>
       <strong>{value}</strong>
       <p>{copy}</p>
+    </div>
+  );
+}
+
+function UsageGrid({ plan, stats }) {
+  const rows = [
+    ['savedDeals', stats.vaultItems ?? stats.dealsAnalysed ?? 0],
+    ['pipelineDeals', stats.pipelineDeals ?? 0],
+    ['portfolioProperties', stats.portfolioProperties ?? 0],
+    ['investorContacts', stats.investorContacts ?? 0],
+  ];
+
+  return (
+    <div className="usage-grid">
+      {rows.map(([resource, count]) => {
+        const limit = getPlanLimit(plan, resource);
+        const isLimited = limit !== Infinity;
+        const percentage = isLimited ? Math.min((count / limit) * 100, 100) : 100;
+        return (
+          <article className="usage-card" key={resource}>
+            <span>{RESOURCE_LABELS[resource]}</span>
+            <strong>{count} / {formatLimit(limit)}</strong>
+            <div className="usage-meter">
+              <i style={{ width: `${percentage}%` }} />
+            </div>
+            <p>{isLimited ? `${Math.max(limit - count, 0)} remaining on Free.` : 'Unlimited on this plan.'}</p>
+          </article>
+        );
+      })}
+    </div>
+  );
+}
+
+function UpgradeModal({ prompt, onClose }) {
+  return (
+    <div className="upgrade-modal-backdrop" role="presentation">
+      <section className="upgrade-modal glass-card" role="dialog" aria-modal="true" aria-labelledby="upgrade-title">
+        <p className="eyebrow">Upgrade required</p>
+        <h2 id="upgrade-title">{prompt.title}</h2>
+        <p>{prompt.copy}</p>
+        <div className="premium-preview-grid compact">
+          <PremiumPreview label="Premium" title="Unlimited workspace" copy="Remove Free limits for saved deals, pipeline, portfolio and contacts." />
+          <PremiumPreview label="Premium" title="Decision tools" copy="Unlock comparison, PDF reports, sensitivity and scenario workflows as they mature." />
+        </div>
+        <div className="hero-actions">
+          <Link className="primary-link" to="/pricing" onClick={onClose}>View Pricing</Link>
+          <button className="secondary-btn" type="button" onClick={onClose}>Not Now</button>
+        </div>
+      </section>
     </div>
   );
 }
